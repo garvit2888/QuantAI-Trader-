@@ -13,6 +13,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from training.dataset_builder import prepare_dataset
 from training.train_ensembles import run_training_pipeline
 from backtesting.backtester import run_backtest
+from data.news_loader import fetch_google_news
 
 st.set_page_config(page_title="Quant AI Dashboard", layout="wide")
 
@@ -119,6 +120,37 @@ if run_btn:
             st.write(f"**Current MACD Trend:** {macd_sgn}")
             volatility = df['Risk_Level'].iloc[-1] * 100
             st.write(f"**Systematic Volatility (20-day):** {volatility:.2f}%")
+            
+        # --- Data Transparency & Explainability ---
+        st.write("---")
+        st.subheader("Data Transparency & AI Decision Log")
+        st.markdown("Building trust requires transparency. Below is the exact live data the intelligence engine processed to calculate the confidence score.")
+        
+        tcol1, tcol2, tcol3 = st.columns(3)
+        
+        with tcol1:
+            st.markdown("#### 1. Why Did The AI Choose This?")
+            st.markdown("These are the Top 5 mathematical drivers that influenced the algorithm, along with their values today:")
+            top_5_feats = feat_imp.head(5).index.tolist()
+            for feat in top_5_feats:
+                current_val = df[feat].iloc[-1]
+                st.write(f"- **{feat}**: `{current_val:.4f}`")
+                
+        with tcol2:
+            st.markdown("#### 2. Raw Market Inputs")
+            st.markdown("The most recent OHLCV market history used for the technical indicators:")
+            st.dataframe(df[['Open', 'High', 'Low', 'Close', 'Volume']].tail(5), use_container_width=True)
+            
+        with tcol3:
+            st.markdown("#### 3. Live News Feed")
+            st.markdown("The exact headlines fetched and scored by the FinBERT NLP engine:")
+            recent_news = fetch_google_news(ticker, max_results=5)
+            if not recent_news.empty:
+                for idx, row in recent_news.iterrows():
+                    pub_str = str(row['published_at'])[:10]
+                    st.markdown(f"- **{pub_str}**: [{row['title']}]({row['link']})")
+            else:
+                st.write("*No recent news found for this ticker.*")
         
         # Backtest Report
         st.write("---")
