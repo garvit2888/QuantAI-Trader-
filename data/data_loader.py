@@ -2,14 +2,12 @@ import yfinance as yf
 import pandas as pd
 from typing import Optional
 
-def fetch_stock_data(ticker: str, start_date: str, end_date: Optional[str] = None, interval: str = "1d") -> pd.DataFrame:
+def fetch_stock_data(ticker: str, interval: str = "1d") -> pd.DataFrame:
     """
-    Fetch historical OHLCV data from Yahoo Finance.
+    Fetch all historical OHLCV data from Yahoo Finance.
     
     Args:
         ticker (str): The stock symbol (e.g., 'AAPL' or 'RELIANCE.NS')
-        start_date (str): Start date in 'YYYY-MM-DD' format
-        end_date (str, optional): End date in 'YYYY-MM-DD' format
         interval (str): Data interval ('1d' for daily, '1h' for hourly, etc.)
         
     Returns:
@@ -17,7 +15,7 @@ def fetch_stock_data(ticker: str, start_date: str, end_date: Optional[str] = Non
     """
     print(f"📥 Fetching market data for {ticker} (Interval: {interval})...")
     try:
-        data = yf.download(ticker, start=start_date, end=end_date, interval=interval, progress=False)
+        data = yf.download(ticker, period="max", interval=interval, progress=False)
         
         if data.empty:
             raise ValueError(f"No data fetched for {ticker}. Check the ticker symbol and date range.")

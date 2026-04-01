@@ -54,19 +54,21 @@ def train_and_validate(X, y, model, n_splits=5):
     model.fit(X, y)
     return model
 
-def run_training_pipeline(ticker="RELIANCE.NS", start_date="2018-01-01", end_date="2024-01-01"):
-    df = prepare_dataset(ticker, start_date=start_date, end_date=end_date, horizon=1)
+def run_training_pipeline(ticker="RELIANCE.NS"):
+    df = prepare_dataset(ticker, horizon=1)
     if df is None or len(df) < 30:
         raise ValueError("Dataset is too small for Machine Learning training. Please choose an older start date or ensure the company has enough public trading history (minimum ~60 days).")
         return None
         
-    # Define features and target
+    # Define features and target using only historical rows that HAVE a target
+    train_df = df.dropna(subset=['Target_Return'])
+    
     # Exclude non-feature columns
     exclude = ['Open', 'High', 'Low', 'Close', 'Target_Return', 'Target_Class', 'Risk_Level']
     features = [c for c in df.columns if c not in exclude]
     
-    X = df[features].ffill().fillna(0) # Safety fill
-    y = df['Target_Class']
+    X_train = train_df[features].ffill().fillna(0) # Safety fill
+    y_train = train_df['Target_Class']
     
     print("\n" + "="*50)
     print(f"🚀 TRAINING ENSEMBLE MODELS on {len(features)} Features")
@@ -84,7 +86,7 @@ def run_training_pipeline(ticker="RELIANCE.NS", start_date="2018-01-01", end_dat
     
     for name, model in models.items():
         print(f"\nTraining {name}...")
-        trained = train_and_validate(X, y, model, n_splits=5)
+        trained = train_and_validate(X_train, y_train, model, n_splits=5)
         trained_models[name] = trained
         
     # Feature Importance (Using RF or XGBoost)

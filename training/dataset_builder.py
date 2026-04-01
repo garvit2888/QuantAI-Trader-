@@ -29,10 +29,12 @@ def create_targets(df: pd.DataFrame, horizon: int = 1) -> pd.DataFrame:
     # Target 3: Risk Level (Historical Volatility over 20 days)
     data['Risk_Level'] = data['Close'].pct_change().rolling(window=20).std()
     
-    # Drop rows where target is NaN (at the end of the dataset and some start indicators)
+    # Do NOT drop rows where Target_Return is NaN (that is 'Today' which we want to predict).
+    # Only drop rows where the indicators are NaN (the beginning of the time series).
+    features = [c for c in data.columns if c not in ['Target_Return', 'Target_Class']]
     initial_len = len(data)
-    data = data.dropna()
-    print(f"🎯 Target generation complete. Dropped {initial_len - len(data)} NaN rows.")
+    data = data.dropna(subset=features)
+    print(f"🎯 Target generation complete. Dropped {initial_len - len(data)} leading NaN rows.")
     return data
 
 def get_train_test_splits(X, y, n_splits=5):
@@ -42,7 +44,7 @@ def get_train_test_splits(X, y, n_splits=5):
     tscv = TimeSeriesSplit(n_splits=n_splits)
     return list(tscv.split(X, y))
 
-def prepare_dataset(ticker: str, start_date: str, end_date: str, horizon: int = 1):
+def prepare_dataset(ticker: str, horizon: int = 1):
     """
     Combines Data Loader, Features, and Targets.
     
@@ -63,8 +65,8 @@ def prepare_dataset(ticker: str, start_date: str, end_date: str, horizon: int = 
     print(f"🏗️  BUILDING DATASET FOR {ticker}")
     print("="*50)
     
-    # 1. Load Data
-    df = fetch_stock_data(ticker, start_date, end_date)
+    # 1. Load Data (Auto Max)
+    df = fetch_stock_data(ticker)
     if df.empty:
         raise ValueError("Failed to fetch market data.")
         

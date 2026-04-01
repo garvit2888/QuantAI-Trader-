@@ -23,10 +23,6 @@ st.markdown("Predictive analysis using Machine Learning, Technical Indicators, a
 # Sidebar for inputs
 st.sidebar.header("System Parameters")
 ticker = st.sidebar.text_input("Stock Ticker", "RELIANCE.NS")
-# Let's set the default start date 3 years ago to ensure we have enough data for ML convergence
-default_start = pd.to_datetime("today") - pd.DateOffset(years=3)
-start_date = st.sidebar.date_input("Start Date", default_start)
-end_date = st.sidebar.date_input("End Date", pd.to_datetime("today"))
 run_btn = st.sidebar.button("Run Intelligence Engine")
 
 st.sidebar.markdown("---")
@@ -43,7 +39,8 @@ st.sidebar.info("""
 if run_btn:
     with st.spinner(f"Fetching data, parsing news, computing TA, and training ML models for {ticker}..."):
         try:
-            res = run_training_pipeline(ticker, start_date=start_date.strftime("%Y-%m-%d"), end_date=end_date.strftime("%Y-%m-%d"))
+            # Auto-fetches the absolute maximum historical data available for best prediction accuracy
+            res = run_training_pipeline(ticker)
         except Exception as e:
             st.error(f"Execution Error: {e}")
             st.warning(f"Troubleshooting Tips:\n1. If this is a recent IPO, data is only available from its public listing date.\n2. Ensure the ticker symbol exactly matches Yahoo Finance (e.g., Lenskart is not publicly listed yet. For Indian stocks, you must use the '.NS' suffix like 'RELIANCE.NS').")
