@@ -2,6 +2,37 @@ import urllib.parse
 import feedparser
 import pandas as pd
 from datetime import datetime
+import re
+
+# Maps common ticker formats to human-readable search terms for Google News.
+_TICKER_TO_NAME = {
+    # Commodities (Yahoo Finance futures format)
+    "GC=F": "Gold", "SI=F": "Silver", "CL=F": "Crude Oil", "NG=F": "Natural Gas",
+    "HG=F": "Copper", "ZC=F": "Corn", "ZW=F": "Wheat", "ZS=F": "Soybeans",
+    "PL=F": "Platinum", "PA=F": "Palladium", "BTC-USD": "Bitcoin", "ETH-USD": "Ethereum",
+    # US Indices
+    "^GSPC": "S&P 500", "^DJI": "Dow Jones", "^IXIC": "Nasdaq", "^RUT": "Russell 2000",
+    # Common US Stocks
+    "AAPL": "Apple", "MSFT": "Microsoft", "GOOGL": "Google Alphabet",
+    "AMZN": "Amazon", "TSLA": "Tesla", "META": "Meta Facebook",
+    "NVDA": "Nvidia", "NFLX": "Netflix", "AMD": "AMD",
+    # Indian Stocks
+    "RELIANCE.NS": "Reliance Industries", "TCS.NS": "Tata Consultancy Services",
+    "INFY.NS": "Infosys", "HDFCBANK.NS": "HDFC Bank", "ICICIBANK.NS": "ICICI Bank",
+    "WIPRO.NS": "Wipro", "SBIN.NS": "State Bank of India",
+    "TATAMOTORS.NS": "Tata Motors", "BAJFINANCE.NS": "Bajaj Finance",
+    "ADANIENT.NS": "Adani Enterprises",
+}
+
+def resolve_ticker_to_name(ticker: str) -> str:
+    """Convert a ticker symbol to a human-readable name for news search."""
+    # Direct lookup first
+    if ticker in _TICKER_TO_NAME:
+        return _TICKER_TO_NAME[ticker]
+    # Strip common suffixes like .NS, .BO, .L etc. for a cleaner fallback
+    clean = re.sub(r'\.(NS|BO|L|TO|AX|PA|DE|HK)$', '', ticker, flags=re.IGNORECASE)
+    clean = re.sub(r'[=\^\-].*', '', clean)  # strip =F, ^, -USD suffixes
+    return clean
 
 def fetch_google_news(query: str, max_results: int = 50) -> pd.DataFrame:
     """
@@ -14,8 +45,10 @@ def fetch_google_news(query: str, max_results: int = 50) -> pd.DataFrame:
     Returns:
         pd.DataFrame: A DataFrame containing 'title', 'link', 'published_at', and 'source'.
     """
-    print(f"📰 Fetching news for query: '{query}'...")
-    encoded_query = urllib.parse.quote_plus(f"{query} stock financial news")
+    # Resolve ticker to human-readable name for better Google News results
+    search_term = resolve_ticker_to_name(query)
+    print(f"📰 Fetching news for: '{query}' → searching as '{search_term}'...")
+    encoded_query = urllib.parse.quote_plus(f"{search_term} stock financial news")
     rss_url = f"https://news.google.com/rss/search?q={encoded_query}&hl=en-US&gl=US&ceid=US:en"
     
     feed = feedparser.parse(rss_url)

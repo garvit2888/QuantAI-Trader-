@@ -83,13 +83,33 @@ def add_technical_indicators(df: pd.DataFrame) -> pd.DataFrame:
     # Distance from Moving Averages
     data['Dist_from_SMA20'] = (data['Close'] - data['SMA_20']) / data['SMA_20']
     
-    # Forward Fill NaNs and then Drop remaining
-    # Initial rows will have NaNs due to lookback periods (e.g. SMA_50 needs 50 rows)
-    data = data.ffill()
+    # NEW: Momentum-Delta Features (Change in indicators)
+    data['RSI_Change'] = data['RSI_14'] - data['RSI_14'].shift(1)
+    data['Volume_Momentum'] = data['Volume'].pct_change(periods=5)
+    data['MACD_Slope'] = data['MACD_Diff'].pct_change(periods=3)
+    
+    # 6. Market Regime Proxies
+    # Structural Trend Filter
+    data['SMA_200'] = ta.trend.sma_indicator(data['Close'], window=200)
+    data['Market_Trend_Regime'] = data['Close'] / (data['SMA_200'] + 1e-9)
+    
+    # Volatility Clustering Proxy
+    rolling_atr_50 = data['ATR'].rolling(window=50).mean()
+    data['Volatility_Regime'] = data['ATR'] / (rolling_atr_50 + 1e-9)
+    
+    # 7. Final Clean-up (Preventing 'Infinity' or 'Large Value' errors in ML)
+    # Replace inf with NaN and then fill with 0
+    data.replace([np.inf, -np.inf], np.nan, inplace=True)
+    data = data.fillna(0)
+    
+    # Clip extreme outliers that can crash LogisticRegression (e.g., > 1000% moves in indicators)
+    # We clip to a very large but finite range
+    numeric_cols = data.select_dtypes(include=[np.number]).columns
+    data[numeric_cols] = data[numeric_cols].clip(lower=-1e6, upper=1e6)
     
     initial_len = len(data)
     data = data.dropna()
-    print(f"✅ Technical features generated. Dropped {initial_len - len(data)} rows due to indicator lookback periods.")
+    print(f"✅ Technical features generated. Dropped {initial_len - len(data)} rows.")
     
     return data
 

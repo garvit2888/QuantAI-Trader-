@@ -1,4 +1,4 @@
-# 📈 QuantAI Trader: System Explanation Workbook
+# QuantAI Trader: System Explanation Workbook
 
 This workbook serves as the ultimate beginner's guide to understanding the QuantAI Trader dashboard. It breaks down the system inputs, how the AI makes decisions, and how to interpret the mathematical backtesting results so you can trade with confidence.
 
@@ -67,6 +67,10 @@ This section answers the question: *"Can I trust this AI?"* It takes the AI mode
 * **Win Rate (e.g. 83.58%):**
   * **What it means:** Out of all the hundreds of times the AI told you to buy or sell, what percentage ended in a profit?
   * **Significance:** A win rate above 50% means the system predicts the future correctly more often than it's predicting it wrong. An 83% win rate in the stock market is exceptionally high.
-* **Sharpe Ratio (e.g. 5.05):**
+* **Sharpe Ratio:**
   * **What it means:** This is the golden metric of Wall Street—it measures *"Risk vs. Reward."* Making huge profits isn't good if you take terrifying gambles to get there. The Sharpe Ratio measures how smooth and safe your ride to profit was (Did you suffer massive portfolio crashes along the way?).
-  * **Significance:** A ratio of 1.0 is "Good", 2.0 is "Great", and 3.0+ is practically "God-Tier." Scoring a 5.05 means the AI captured practically all of the upward momentum of the stock while almost perfectly avoiding the terrifying drops.
+  * **Significance:** **The "Sweet Spot" of Realism vs. Performance**
+    In algorithmic trading, we tend to grade Sharpe ratios like this:
+    * **< 1.0:** Sub-optimal. You are taking on too much volatility risk for the returns you are getting.
+    * **1.0 to 1.9:** Excellent (Professional Grade). The strategy has a genuine edge and provides smooth, consistent returns relative to the risk taken. Many elite quantitative hedge funds proudly run strategies in the 1.2 to 1.8 range.
+    * **2.0 to 3.0+:** Exceptional, but often a red flag in backtesting. High Sharpe ratios often indicate overfitting (curve-fitting to historical data) or predictive data leakage.

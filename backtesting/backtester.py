@@ -67,21 +67,13 @@ if __name__ == "__main__":
     res = run_training_pipeline("RELIANCE.NS")
     
     if res:
-        models, df, _ = res
+        models, df, feat_imp, oos_signals = res
         model = models["RandomForest"]
+        oos_preds = oos_signals["RandomForest"]
         
-        exclude = ['Open', 'High', 'Low', 'Close', 'Target_Return', 'Target_Class', 'Risk_Level']
-        features = [c for c in df.columns if c not in exclude]
-        
-        X = df[features].ffill().fillna(0)
-        
-        # Generate signals on the dataset
-        # For a truly strict rigorous test, we should only test on the out-of-sample splits.
-        # But this serves as an architectural template demonstration.
-        predictions = model.predict(X)
-        signals = pd.Series(predictions, index=df.index)
-        
-        pf, metrics = run_backtest(df, signals)
+        # Run on OOS data
+        oos_df = df.loc[oos_preds.index]
+        pf, metrics = run_backtest(oos_df, oos_preds)
         
         # Generates a HTML plot of the portfolio
         # fig = pf.plot()

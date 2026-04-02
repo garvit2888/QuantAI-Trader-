@@ -2,7 +2,10 @@ from transformers import pipeline
 import pandas as pd
 import numpy as np
 import warnings
+import os
 
+os.environ["TRANSFORMERS_NO_ADVISORY_WARNINGS"] = "true"
+os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
 warnings.filterwarnings("ignore")
 
 _ANALYZER = None
@@ -38,12 +41,12 @@ def compute_daily_sentiment(news_df: pd.DataFrame) -> pd.DataFrame:
     print(f"🧠 Analyzing sentiment for {len(news_df)} articles...")
     analyzer = get_sentiment_analyzer()
     
-    # We will score the titles
-    titles = news_df['title'].astype(str).tolist()
+    # Truncate titles to 512 chars max to avoid FinBERT tokenizer overflow on long headlines
+    titles = [t[:512] for t in news_df['title'].astype(str).tolist()]
     
-    # Batch process
+    # Batch process with truncation flag for safety
     try:
-        results = analyzer(titles)
+        results = analyzer(titles, truncation=True, max_length=512)
     except Exception as e:
         print(f"❌ Error in sentiment analysis: {e}")
         return pd.DataFrame(columns=['Date', 'avg_sentiment', 'news_count'])
@@ -51,14 +54,19 @@ def compute_daily_sentiment(news_df: pd.DataFrame) -> pd.DataFrame:
     news_df['sentiment_label'] = [res['label'] for res in results]
     news_df['sentiment_score'] = [res['score'] for res in results]
     
+    labels = [res['label'] for res in results]
+    print(f"   📊 Sentiment breakdown — {labels.count('positive')} positive, "
+          f"{labels.count('negative')} negative, {labels.count('neutral')} neutral")
+    
     # Convert text label to numerical score
-    # Positive = +1 * score, Negative = -1 * score, Neutral = 0
+    # Positive = +score (0 to 1), Negative = -score (-1 to 0)
+    # Neutral = small fractional score to distinguish from missing data (0)
     def map_sentiment(row):
         lbl = row['sentiment_label']
         score = row['sentiment_score']
         if lbl == 'positive': return score
         elif lbl == 'negative': return -score
-        else: return 0.0
+        else: return score * 0.05  # neutral: near-zero but not exactly 0
         
     news_df['numeric_sentiment'] = news_df.apply(map_sentiment, axis=1)
     

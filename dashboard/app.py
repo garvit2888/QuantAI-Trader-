@@ -5,6 +5,7 @@ import sys
 import os
 import warnings
 
+# QuantAI Dashboard - Alpha Booster Upgrade Sync
 warnings.filterwarnings('ignore')
 
 # Ensure backend modules can be imported
@@ -14,6 +15,59 @@ from training.dataset_builder import prepare_dataset
 from training.train_ensembles import run_training_pipeline
 from backtesting.backtester import run_backtest
 from data.news_loader import fetch_google_news
+
+def generate_ai_commentary(ticker, signal, conf, sentiment, feat_imp, metrics, df):
+    """
+    Generate a human-readable trading summary based on all system outputs.
+    """
+    top_feat = feat_imp.index[0]
+    top_val = df[top_feat].iloc[-1]
+    win_rate = metrics['Win Rate (%)']
+    sharpe = metrics['Sharpe Ratio']
+    
+    # 1. Consensus & The "Edge"
+    edge = f"The Calibrated Ensemble is **{conf:.1f}% probabilistically confident** in a **{signal}** direction. "
+    if conf >= 75:
+        edge += "This represents an exceptionally strong calibrated edge, indicating a high statistical probability of the trade succeeding based on historical mapping."
+    elif conf >= 65:
+        edge += "The underlying models have calculated a solid statistical edge, fully supporting the trade direction."
+    else:
+        edge += "The probability calibration shows internal variance, suggesting a more cautious or volatile entry."
+
+    # 2. The Catalyst (Sentiment)
+    if sentiment > 0.5:
+        catalyst = f"**Strong Bullish Sentiment ({sentiment:.2f}):** The latest financial news headlines are overwhelmingly positive, acting as a powerful fundamental tailwind for this trade."
+    elif sentiment < -0.5:
+        catalyst = f"**Strong Bearish Sentiment ({sentiment:.2f}):** Negative news headlines are creating significant selling pressure, which aligns with the AI's downward target."
+    else:
+        catalyst = f"**Neutral Sentiment ({sentiment:.2f}):** The news feed is currently balanced. This trade is being driven primarily by technical price action rather than news catalysts."
+
+    # 3. Technical Reasoning
+    reasoning = f"The primary mathematical driver today is **{top_feat}** (Value: {top_val:.4f}). "
+    if "RSI" in top_feat:
+        reasoning += "The AI is currently prioritizing overall momentum and overbought/oversold levels to time this entry."
+    elif "BB" in top_feat or "SMA" in top_feat:
+        reasoning += "The model is focused on mean-reversion, specifically how far the price has deviated from its historical average."
+    elif "Return" in top_feat:
+        reasoning += "The engine is 'chasing' the immediate short-term trend, betting on a continuation of today's price velocity."
+    else:
+        reasoning += "This indicator is providing the highest statistical signal for predicting tomorrow's direction based on historical patterns."
+
+    # 4. The "Reality Check" (Risk)
+    risk = f"**Risk Assessment:** Historically, this system has a **{win_rate:.1f}% Win Rate** on {ticker}. "
+    if sharpe < 0.5:
+        risk += f"The Sharpe Ratio of {sharpe:.2f} is relatively low, meaning that while the system is profitable, the price action for {ticker} can be extremely 'choppy' and volatile. **Strict stop-losses are mandatory.**"
+    elif sharpe > 1.0:
+        risk += f"The Sharpe Ratio of {sharpe:.2f} is excellent, indicating this has historically been a very smooth and reliable trend for the AI to capture."
+    else:
+        risk += f"The Sharpe Ratio of {sharpe:.2f} indicates moderate risk-adjusted returns."
+
+    return {
+        "edge": edge,
+        "catalyst": catalyst,
+        "reasoning": reasoning,
+        "risk": risk
+    }
 
 st.set_page_config(page_title="Quant AI Dashboard", layout="wide")
 
@@ -47,47 +101,68 @@ if run_btn:
             res = None
 
     if res is not None:
-        models, df, feat_imp = res
-        model = models["RandomForest"]
+        models, df, feat_imp, oos_signals = res
+        # Use Ensemble OOS for backtesting
+        if "Ensemble" in oos_signals:
+            oos_preds = oos_signals["Ensemble"]
+        else:
+            # Fallback if Ensemble signal is missing
+            oos_preds = oos_signals[next(iter(oos_signals))]
+
+        # Align DF and Run Backtest early for metrics availability
+        oos_df = df.loc[oos_preds.index]
+        pf, metrics = run_backtest(oos_df, oos_preds)
 
         # Current Price & Data
         latest_price = df['Close'].iloc[-1]
         prev_price = df['Close'].iloc[-2]
         change = ((latest_price - prev_price) / prev_price) * 100
 
+        # --- 1. Top Level Metrics & Profile ---
+        st.subheader(f"📊 Trading Profile: {ticker}")
+        
         col1, col2, col3 = st.columns(3)
-        col1.metric("Latest Close Price", f"[{ticker}] {latest_price:.2f}", f"{change:.2f}%")
+        col1.metric("Asset Price", f"{latest_price:.2f}", f"{change:.2f}%")
         
-        # Next Day Prediction Processing
-        exclude = ['Open', 'High', 'Low', 'Close', 'Target_Return', 'Target_Class', 'Risk_Level']
-        features = [c for c in df.columns if c not in exclude]
+        # The exact elite orthogonal features in the EXACT sequence the models were trained on
+        m_sample = next(iter(models.values()))
+        trained_features = list(m_sample.feature_names_in_)
         
-        X = df[features].ffill().fillna(0)
-        
-        # Predict the latest row (today's close predicting tomorrow's movement)
-        latest_features = X.iloc[-1:]
-        pred = model.predict(latest_features)[0]
-        prob = model.predict_proba(latest_features)[0]
+        X = df[trained_features].ffill().fillna(0)
         
         # Recent Sentiment
         recent_sentiment = df['avg_sentiment'].iloc[-1]
         
-        # Signal Generation logic with Risk/Confidence Thresholds
-        if pred == 1 and prob[1] > 0.55:
-            signal = "BUY"
-            conf = prob[1] * 100
-        elif pred == 1 and prob[1] <= 0.55:
+        # Multi-Model Continuous Probabilities via Calibration
+        latest_features = X.iloc[-1:]
+        probas = []
+        for name, m in models.items():
+            try:
+                prob = m.predict_proba(latest_features)[0][1]
+            except Exception:
+                # Fallback if a specific model failed to train class probabilities
+                prob = m.predict(latest_features)[0]
+            probas.append(prob)
+        
+        # Exact calibrated statistical mean probability
+        avg_prob = sum(probas) / len(probas)
+        
+        # Signal Generation (Based on Statistical Edges)
+        if avg_prob >= 0.65:
+            signal = "BUY (Strong)"
+            conf = avg_prob * 100
+        elif avg_prob > 0.50:
             signal = "HOLD (Weak Buy)"
-            conf = prob[1] * 100
-        elif pred == 0 and prob[0] > 0.55:
-            signal = "SELL"
-            conf = prob[0] * 100
+            conf = avg_prob * 100
+        elif avg_prob <= 0.35:
+            signal = "SELL (Strong)"
+            conf = (1.0 - avg_prob) * 100
         else:
             signal = "HOLD (Weak Sell)"
-            conf = prob[0] * 100
+            conf = (1.0 - avg_prob) * 100
 
-        col2.metric("AI Signal (Next Interval Target)", signal)
-        col3.metric("Prediction Confidence", f"{conf:.1f}%")
+        col2.metric("AI Calibrated Signal", signal)
+        col3.metric("True Probability", f"{conf:.1f}%")
 
         # Visualizations
         st.write("---")
@@ -102,6 +177,20 @@ if run_btn:
         
         fig.update_layout(height=400, margin=dict(l=0, r=0, t=30, b=0))
         st.plotly_chart(fig, use_container_width=True)
+
+        # --- AI Intelligence Report (Virtual Analyst) ---
+        st.write("---")
+        with st.container():
+            st.subheader("🧠 AI Intelligence Report & Executive Summary")
+            report = generate_ai_commentary(ticker, signal, conf, recent_sentiment, feat_imp, metrics, df)
+            
+            c1, c2 = st.columns(2)
+            with c1:
+                st.info(f"### The Strategy Edge\n{report['edge']}")
+                st.info(f"### The Market Catalyst\n{report['catalyst']}")
+            with c2:
+                st.success(f"### Mathematical Reasoning\n{report['reasoning']}")
+                st.warning(f"### Transparency & Risk\n{report['risk']}")
 
         colA, colB = st.columns(2)
         
@@ -149,14 +238,13 @@ if run_btn:
             else:
                 st.write("*No recent news found for this ticker.*")
         
-        # Backtest Report
+        # Backtest Report (USING OUT-OF-SAMPLE DATA)
         st.write("---")
-        st.subheader("Historical VectorBT Simulation")
-        st.markdown("This backtest simulates using the trained AI logic systematically over the dataset.")
+        st.subheader("Historical VectorBT Simulation (Out-Of-Sample)")
+        st.markdown("This backtest uses **Walk-Forward Validation**. It only shows performance on data the AI had *never seen before* making each trade. This is a realistic representation of real-world performance.")
         
-        # Generate signals on the whole dataset
-        signals = pd.Series(model.predict(X), index=df.index)
-        pf, metrics = run_backtest(df, signals)
+        # Align DF with OOS signals
+        # (Moved up for metrics availability)
         
         bcol1, bcol2, bcol3, bcol4 = st.columns(4)
         bcol1.metric("Strategy Yield", f"{metrics['Strategy Total Return (%)']:.2f}%")

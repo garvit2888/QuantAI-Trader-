@@ -74,7 +74,8 @@ def prepare_dataset(ticker: str, horizon: int = 1):
     df = add_technical_indicators(df)
     
     # 3. Add Sentiment
-    news = fetch_google_news(ticker, max_results=20)
+    # Cap to 10 to massively speed up FinBERT CPU inference time
+    news = fetch_google_news(ticker, max_results=10)
     sentiment_df = compute_daily_sentiment(news)
     
     # Merge Sentiment
@@ -90,8 +91,9 @@ def prepare_dataset(ticker: str, horizon: int = 1):
         df['avg_sentiment'] = 0.0
         df['news_count'] = 0.0
     else:
-        df['avg_sentiment'] = df['avg_sentiment'].fillna(0.0)
-        df['news_count'] = df['news_count'].fillna(0.0)
+        # Forward fill recent sentiment (e.g. weekend news to Monday, or yesterday to today)
+        df['avg_sentiment'] = df['avg_sentiment'].ffill(limit=5).fillna(0.0)
+        df['news_count'] = df['news_count'].ffill(limit=5).fillna(0.0)
         
     df['Date'] = pd.to_datetime(df['Date'])
     df = df.set_index('Date')
