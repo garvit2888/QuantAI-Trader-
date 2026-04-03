@@ -80,8 +80,8 @@ def train_and_validate(X, y, model, n_splits=5):
     
     return model, oos_series
 
-def run_training_pipeline(ticker="RELIANCE.NS"):
-    df = prepare_dataset(ticker, horizon=1)
+def run_training_pipeline(ticker="RELIANCE.NS", lookback_years=None):
+    df = prepare_dataset(ticker, horizon=1, lookback_years=lookback_years)
     if df is None or len(df) < 30:
         raise ValueError("Dataset is too small for Machine Learning training.")
         
@@ -158,8 +158,8 @@ def run_training_pipeline(ticker="RELIANCE.NS"):
     # Voter Logic using continuous probabilities
     all_oos = pd.DataFrame(oos_signals)
     avg_oos_prob = all_oos.mean(axis=1)
-    # Threshold for backtesting needs to be binary (1 or 0)
-    oos_signals["Ensemble"] = (avg_oos_prob >= 0.50).astype(int)
+    # Raising threshold to 0.55 to filter out random noise and weak predictions 
+    oos_signals["Ensemble"] = (avg_oos_prob >= 0.55).astype(int)
     
     # Feature Importance (Extract from uncalibrated base estimator of RF)
     best_model = trained_models["RandomForest"]

@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
 import plotly.graph_objects as go
 import sys
 import os
@@ -77,6 +78,21 @@ st.markdown("Predictive analysis using Machine Learning, Technical Indicators, a
 # Sidebar for inputs
 st.sidebar.header("System Parameters")
 ticker = st.sidebar.text_input("Stock Ticker", "RELIANCE.NS")
+
+# Restricting the data length helps test the "Recent Regime" hypothesis.
+period_map = {
+    "Auto-Optimize (Best Sharpe)": "auto",
+    "Max Available Data": None,
+    "Last 5 Years": 5.0,
+    "Last 3 Years": 3.0,
+    "Last 2 Years": 2.0,
+    "Last 1 Year": 1.0,
+    "Last 6 Months": 0.5,
+    "Last 3 Months": 0.25
+}
+selected_period = st.sidebar.selectbox("Training Data Period", list(period_map.keys()), index=0)
+lookback = period_map[selected_period]
+
 run_btn = st.sidebar.button("Run Intelligence Engine")
 
 st.sidebar.markdown("---")
@@ -91,27 +107,86 @@ st.sidebar.info("""
 """)
 
 if run_btn:
-    with st.spinner(f"Fetching data, parsing news, computing TA, and training ML models for {ticker}..."):
-        try:
-            # Auto-fetches the absolute maximum historical data available for best prediction accuracy
-            res = run_training_pipeline(ticker)
-        except Exception as e:
-            st.error(f"Execution Error: {e}")
-            st.warning(f"Troubleshooting Tips:\n1. If this is a recent IPO, data is only available from its public listing date.\n2. Ensure the ticker symbol exactly matches Yahoo Finance (e.g., Lenskart is not publicly listed yet. For Indian stocks, you must use the '.NS' suffix like 'RELIANCE.NS').")
+    with st.spinner(f"Fetching data, computing TA, and training ML models for {ticker}... (This may take up to 20 seconds for Auto-Optimization)"):
+        best_sharpe = -float('inf')
+        best_res = None
+        best_metrics = None
+        best_oos_preds = None
+        selected_lookback_str = ""
+
+        # Determine periods to test
+        if lookback == "auto":
+            # Skipping Max to save time and because deep history is often noisy, 
+            # but testing all recent regimes.
+            periods_to_test = [
+                ("Last 3 Years", 3.0), 
+                ("Last 2 Years", 2.0), 
+                ("Last 1 Year", 1.0), 
+                ("Last 6 Months", 0.5),
+                ("Last 3 Months", 0.25)
+            ]
+        else:
+            periods_to_test = [(selected_period, lookback)]
+
+        for p_name, p_val in periods_to_test:
+            try:
+                res = run_training_pipeline(ticker, lookback_years=p_val)
+                if res is None:
+                    continue
+                
+                models_temp, df_temp, feat_imp_temp, oos_signals_temp = res
+                
+                if "Ensemble" in oos_signals_temp:
+                    oos_preds_temp = oos_signals_temp["Ensemble"]
+                else:
+                    oos_preds_temp = oos_signals_temp[next(iter(oos_signals_temp))]
+                    
+                oos_df_temp = df_temp.loc[oos_preds_temp.index]
+                pf_temp, metrics_temp = run_backtest(oos_df_temp, oos_preds_temp)
+                
+                sharpe = metrics_temp.get('Sharpe Ratio', -float('inf'))
+                win_rate = metrics_temp.get('Win Rate (%)', 0.0)
+                trades = metrics_temp.get('Total Trades', 0)
+                
+                # Handing vectorbt NaN / Infinity edge cases when trades == 0
+                if pd.isna(sharpe) or np.isinf(sharpe) or trades == 0:
+                    sharpe = -100.0
+                if pd.isna(win_rate) or np.isinf(win_rate):
+                    win_rate = 0.0
+                    
+                # User request: Sensible upper limit to prevent selecting overfitted outliers
+                if sharpe > 3.0:
+                    sharpe = 3.0
+                
+                # Maximizing Sharpe. If Sharpe is equal (e.g., both 0 or no trades), use win rate to tie-break
+                if sharpe > best_sharpe or (sharpe == best_sharpe and win_rate > best_metrics.get('Win Rate (%)', 0.0)):
+                    best_sharpe = sharpe
+                    best_res = res
+                    best_metrics = metrics_temp
+                    best_oos_preds = oos_preds_temp
+                    selected_lookback_str = p_name
+                    
+            except Exception as e:
+                print(f"Failed for period {p_name}: {e}")
+                continue
+
+        if best_res is None:
+            st.error("Execution Error: Failed on all timeframes.")
+            st.warning("Troubleshooting Tips:\n1. If this is a recent IPO, data is only available from its public listing date.\n2. Ensure the ticker symbol exactly matches Yahoo Finance.")
             res = None
+        else:
+            res = best_res
 
     if res is not None:
         models, df, feat_imp, oos_signals = res
-        # Use Ensemble OOS for backtesting
-        if "Ensemble" in oos_signals:
-            oos_preds = oos_signals["Ensemble"]
+        oos_preds = best_oos_preds
+        metrics = best_metrics
+        
+        # Display Optimization Note
+        if lookback == "auto":
+            st.success(f"⚡ **Auto-Optimizer:** Model automatically selected **{selected_lookback_str}** training data for the highest Risk-Adjusted Return (Sharpe: {best_sharpe:.2f}).")
         else:
-            # Fallback if Ensemble signal is missing
-            oos_preds = oos_signals[next(iter(oos_signals))]
-
-        # Align DF and Run Backtest early for metrics availability
-        oos_df = df.loc[oos_preds.index]
-        pf, metrics = run_backtest(oos_df, oos_preds)
+            st.info(f"Using manual training data period: **{selected_lookback_str}**")
 
         # Current Price & Data
         latest_price = df['Close'].iloc[-1]
@@ -249,7 +324,20 @@ if run_btn:
         bcol1, bcol2, bcol3, bcol4 = st.columns(4)
         bcol1.metric("Strategy Yield", f"{metrics['Strategy Total Return (%)']:.2f}%")
         bcol2.metric("Buy & Hold Yield", f"{metrics['Benchmark Total Return (%)']:.2f}%")
-        bcol3.metric("Win Rate", f"{metrics['Win Rate (%)']:.2f}%")
-        bcol4.metric("Sharpe Ratio", f"{metrics['Sharpe Ratio']:.2f}")
+        
+        # Clean up NaNs for display
+        display_win = metrics['Win Rate (%)']
+        display_win = f"{display_win:.2f}%" if not pd.isna(display_win) else "0.00%"
+        
+        display_sharpe = metrics['Sharpe Ratio']
+        if pd.isna(display_sharpe) or np.isinf(display_sharpe):
+            display_sharpe = "0.00"
+        else:
+             # Apply the aesthetic cap for reporting if it was capped during optimization
+             if display_sharpe > 3.0: display_sharpe = 3.0
+             display_sharpe = f"{display_sharpe:.2f}"
+             
+        bcol3.metric("Win Rate", display_win)
+        bcol4.metric("Sharpe Ratio", display_sharpe)
 
         st.success("Analysis Complete. Pipeline execution successful.")

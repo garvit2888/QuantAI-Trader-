@@ -44,7 +44,9 @@ def get_train_test_splits(X, y, n_splits=5):
     tscv = TimeSeriesSplit(n_splits=n_splits)
     return list(tscv.split(X, y))
 
-def prepare_dataset(ticker: str, horizon: int = 1):
+from typing import Optional
+
+def prepare_dataset(ticker: str, horizon: int = 1, lookback_years: Optional[float] = None):
     """
     Combines Data Loader, Features, and Targets.
     
@@ -65,11 +67,22 @@ def prepare_dataset(ticker: str, horizon: int = 1):
     print(f"🏗️  BUILDING DATASET FOR {ticker}")
     print("="*50)
     
-    # 1. Load Data (Auto Max)
+    # 1. Load Data
     df = fetch_stock_data(ticker)
     if df.empty:
         raise ValueError("Failed to fetch market data.")
         
+    if lookback_years is not None:
+        try:
+            start_date = pd.Timestamp.now() - pd.DateOffset(days=int(365 * lookback_years))
+            # Handle timezone neutrality safely
+            if df.index.tz is not None:
+                start_date = start_date.tz_localize(df.index.tzinfo)
+            df = df[df.index >= start_date]
+            print(f"✂️ Sliced dataset to last {lookback_years} years (from {start_date.date()})")
+        except Exception as e:
+            print(f"⚠️ Could not slice date range: {e}")
+            
     # 2. Add Tech Indicators
     df = add_technical_indicators(df)
     
