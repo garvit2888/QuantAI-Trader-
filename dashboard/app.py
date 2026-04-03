@@ -2,6 +2,9 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
+import streamlit.components.v1 as components
+import datetime
+import pytz
 import sys
 import os
 import warnings
@@ -17,69 +20,377 @@ from training.train_ensembles import run_training_pipeline
 from backtesting.backtester import run_backtest
 from data.news_loader import fetch_google_news
 
+st.set_page_config(page_title="QuantAI Terminal", layout="wide", initial_sidebar_state="expanded")
+
+# --- CUSTOM CSS INJECTION ---
+# Institutional Dark Theme & Glassmorphism
+st.markdown("""
+<style>
+    /* Global Background and Fonts */
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap');
+    
+    html, body {
+        font-family: 'Inter', sans-serif !important;
+        background-color: #050505 !important; 
+    }
+    
+    .stApp, [data-testid="stAppViewContainer"] {
+        background-color: transparent !important;
+        color: #E5E5E5;
+    }
+    
+    [data-testid="stHeader"] {
+        background-color: transparent !important;
+        z-index: 99999 !important;
+    }
+    
+    /* Clean Top Bar elements rather than hiding the whole header */
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+    .stDeployButton {display: none;}
+    
+    /* Ensure the sidebar toggle itself is extremely visible */
+    [data-testid="collapsedControl"] {
+        z-index: 999999 !important;
+        background-color: rgba(11, 11, 11, 0.5) !important;
+        border-radius: 4px;
+    }
+    [data-testid="collapsedControl"] svg {
+        fill: #FFFFFF !important;
+        color: #FFFFFF !important;
+    }
+    
+    .block-container {
+        padding-top: 1rem;
+        padding-bottom: 2rem;
+        max-width: 95%;
+    }
+    
+    /* Custom Card Glassmorphism */
+    .quant-card {
+        background: rgba(11, 11, 11, 0.7);
+        backdrop-filter: blur(10px);
+        -webkit-backdrop-filter: blur(10px);
+        border: 1px solid #1A1A1A;
+        border-radius: 8px;
+        padding: 20px;
+        margin-bottom: 1rem;
+        transition: transform 0.2s ease, box-shadow 0.2s ease;
+    }
+    .quant-card:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 20px rgba(59, 130, 246, 0.1);
+        border-color: #2A2A2A;
+    }
+    
+    /* Signal Specifics */
+    .signal-BUY { color: #22C55E; text-shadow: 0 0 10px rgba(34, 197, 94, 0.3); }
+    .signal-SELL { color: #EF4444; text-shadow: 0 0 10px rgba(239, 68, 68, 0.3); }
+    .signal-HOLD { color: #3B82F6; text-shadow: 0 0 10px rgba(59, 130, 246, 0.3); }
+    
+    /* Custom Typography */
+    h1, h2, h3, h4, h5, h6 {
+        font-family: 'IBM Plex Sans', sans-serif !important;
+        font-weight: 500 !important;
+        letter-spacing: -0.5px;
+        color: #FFFFFF;
+    }
+    
+    hr {
+        border-color: #1A1A1A;
+        margin: 2rem 0;
+    }
+    
+    /* Hide Streamlit default metric styling to use our own */
+    [data-testid="stMetricValue"] {
+        font-size: 1.5rem !important;
+    }
+    
+    /* Responsive Grid Layouts */
+    .unified-metrics-card {
+        display: flex;
+        flex-direction: row;
+        justify-content: space-between;
+        align-items: center;
+        border-left: 4px solid #3B82F6;
+        padding: 20px;
+        background: rgba(11, 11, 11, 0.7);
+        backdrop-filter: blur(10px);
+        -webkit-backdrop-filter: blur(10px);
+        border: 1px solid #1A1A1A;
+        border-radius: 8px;
+    }
+    
+    .metric-segment {
+        flex: 1;
+        text-align: center;
+        border-right: 1px solid #1A1A1A;
+        padding: 0 10px;
+    }
+    .metric-segment:last-child {
+        border-right: none;
+    }
+    .metric-segment.signal-area {
+        flex: 2;
+        text-align: left;
+        padding-right: 15px;
+    }
+    
+    /* Mobile Media Queries */
+    @media (max-width: 768px) {
+        .unified-metrics-card {
+            flex-direction: column;
+            align-items: flex-start;
+            padding: 15px;
+            border-left: none;
+            border-top: 4px solid #3B82F6;
+        }
+        .metric-segment {
+            flex: none;
+            width: 100%;
+            text-align: left;
+            border-right: none;
+            border-bottom: 1px solid #1A1A1A;
+            padding: 10px 0;
+        }
+        .metric-segment:last-child {
+            border-bottom: none;
+        }
+        .metric-segment.signal-area {
+            padding-right: 0;
+        }
+        h1 { font-size: 1.8rem !important; }
+        h2 { font-size: 1.4rem !important; }
+    }
+</style>
+""", unsafe_allow_html=True)
+
+# --- PARTICLE BACKGROUND INJECTION ---
+components.html("""
+<script>
+    const parentWindow = window.parent;
+    const parentDoc = parentWindow.document;
+    
+    if (!parentDoc.getElementById('quant-starfield')) {
+        const canvas = parentDoc.createElement('canvas');
+        canvas.id = 'quant-starfield';
+        canvas.style.position = 'fixed';
+        canvas.style.top = '0';
+        canvas.style.left = '0';
+        canvas.style.width = '100vw';
+        canvas.style.height = '100vh';
+        canvas.style.pointerEvents = 'none';
+        canvas.style.zIndex = '0'; 
+        parentDoc.body.insertBefore(canvas, parentDoc.body.firstChild);
+        
+        const ctx = canvas.getContext('2d');
+        let width, height;
+        let particles = [];
+        
+        function resize() {
+            width = canvas.width = parentWindow.innerWidth;
+            height = canvas.height = parentWindow.innerHeight;
+        }
+        
+        parentWindow.addEventListener('resize', resize);
+        resize();
+        
+        let mouse = { x: null, y: null, radius: 150 };
+        
+        parentWindow.addEventListener('mousemove', function(event) {
+            mouse.x = event.clientX;
+            mouse.y = event.clientY;
+        });
+        
+        parentWindow.addEventListener('mouseout', function() {
+            mouse.x = null;
+            mouse.y = null;
+        });
+        
+        class Particle {
+            constructor() {
+                this.x = Math.random() * width;
+                this.y = Math.random() * height;
+                this.size = Math.random() * 2 + 0.5;
+                this.speedX = Math.random() * 0.6 - 0.3;
+                this.speedY = Math.random() * 0.6 - 0.3;
+                this.color = 'rgba(59, 130, 246, 0.4)';
+            }
+            update() {
+                this.x += this.speedX;
+                this.y += this.speedY;
+                
+                if (this.size > 0.2) this.size -= 0.01;
+                
+                if (this.x < 0 || this.x > width) this.speedX = -this.speedX;
+                if (this.y < 0 || this.y > height) this.speedY = -this.speedY;
+                
+                // Cursor interaction
+                if (mouse.x != null) {
+                    let dx = mouse.x - this.x;
+                    let dy = mouse.y - this.y;
+                    let distance = Math.sqrt(dx*dx + dy*dy);
+                    if (distance < mouse.radius) {
+                        const forceDirectionX = dx / distance;
+                        const forceDirectionY = dy / distance;
+                        const force = (mouse.radius - distance) / mouse.radius;
+                        const directionX = forceDirectionX * force * 5;
+                        const directionY = forceDirectionY * force * 5;
+                        this.x -= directionX;
+                        this.y -= directionY;
+                    }
+                }
+            }
+            draw() {
+                ctx.fillStyle = this.color;
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+                ctx.fill();
+            }
+        }
+        
+        function init() {
+            particles = [];
+            let numParticles = (width * height) / 5500;
+            for(let i=0; i<numParticles; i++) {
+                particles.push(new Particle());
+            }
+        }
+        
+        function animate() {
+            ctx.clearRect(0, 0, width, height);
+            for(let i=0; i<particles.length; i++) {
+                particles[i].update();
+                particles[i].draw();
+                
+                for(let j=i; j<particles.length; j++) {
+                    let dx = particles[i].x - particles[j].x;
+                    let dy = particles[i].y - particles[j].y;
+                    let distance = Math.sqrt(dx*dx + dy*dy);
+                    
+                    if (distance < 130) {
+                        ctx.beginPath();
+                        ctx.strokeStyle = `rgba(59, 130, 246, ${0.25 - distance/520})`;
+                        ctx.lineWidth = 0.8;
+                        ctx.moveTo(particles[i].x, particles[i].y);
+                        ctx.lineTo(particles[j].x, particles[j].y);
+                        ctx.stroke();
+                        ctx.closePath();
+                    }
+                }
+            }
+            requestAnimationFrame(animate);
+        }
+        
+        init();
+        animate();
+    }
+</script>
+""", height=0, width=0)
+
+# --- HELPER UI COMPONENTS ---
+def render_kpi_card(title, value, subtitle="", highlight=False):
+    style = "border-color: #3B82F6;" if highlight else ""
+    val_color = "#FFFFFF"
+    
+    if "%" in str(value) and not "-" in str(value) and not "nan" in str(value).lower() and title != "Win Rate":
+        if float(str(value).replace("%", "")) > 0: val_color = "#22C55E"
+    if "-" in str(value): val_color = "#EF4444"
+        
+    st.markdown(f"""
+    <div class="quant-card" style="{style}">
+        <p style="margin:0; font-size: 0.85rem; color: #9CA3AF; text-transform: uppercase; letter-spacing: 1px;">{title}</p>
+        <h2 style="margin: 5px 0; font-size: 1.8rem; color: {val_color}; font-family: 'IBM Plex Sans'; font-weight: 500;">{value}</h2>
+        <p style="margin:0; font-size: 0.75rem; color: #6B7280;">{subtitle}</p>
+    </div>
+    """, unsafe_allow_html=True)
+
 def generate_ai_commentary(ticker, signal, conf, sentiment, feat_imp, metrics, df):
     """
     Generate a human-readable trading summary based on all system outputs.
+    Formatted strictly for professional UI.
     """
     top_feat = feat_imp.index[0]
     top_val = df[top_feat].iloc[-1]
-    win_rate = metrics['Win Rate (%)']
-    sharpe = metrics['Sharpe Ratio']
     
     # 1. Consensus & The "Edge"
-    edge = f"The Calibrated Ensemble is **{conf:.1f}% probabilistically confident** in a **{signal}** direction. "
+    edge = f"Calibrated Ensemble indicates {conf:.1f}% probability of directional continuation. "
     if conf >= 75:
-        edge += "This represents an exceptionally strong calibrated edge, indicating a high statistical probability of the trade succeeding based on historical mapping."
+        edge += "Statistical advantage threshold met. Historical mapping validates high-conviction probability."
     elif conf >= 65:
-        edge += "The underlying models have calculated a solid statistical edge, fully supporting the trade direction."
+        edge += "Acceptable statistical edge detected, supporting intended trajectory."
     else:
-        edge += "The probability calibration shows internal variance, suggesting a more cautious or volatile entry."
+        edge += "Internal variance detected. Caution advised due to probability dilution."
 
     # 2. The Catalyst (Sentiment)
     if sentiment > 0.5:
-        catalyst = f"**Strong Bullish Sentiment ({sentiment:.2f}):** The latest financial news headlines are overwhelmingly positive, acting as a powerful fundamental tailwind for this trade."
+        catalyst = f"Positive drift detected ({sentiment:.2f} relative magnitude). Macro fundamental tailwinds present."
     elif sentiment < -0.5:
-        catalyst = f"**Strong Bearish Sentiment ({sentiment:.2f}):** Negative news headlines are creating significant selling pressure, which aligns with the AI's downward target."
+        catalyst = f"Negative drift detected ({sentiment:.2f} relative magnitude). Macro headwinds align with downside targets."
     else:
-        catalyst = f"**Neutral Sentiment ({sentiment:.2f}):** The news feed is currently balanced. This trade is being driven primarily by technical price action rather than news catalysts."
+        catalyst = f"Neutral drift ({sentiment:.2f} magnitude). Signal relies entirely on mathematical momentum."
 
     # 3. Technical Reasoning
-    reasoning = f"The primary mathematical driver today is **{top_feat}** (Value: {top_val:.4f}). "
+    reasoning = f"Primary predictive vector identified as {top_feat} (Current State: {top_val:.4f}). "
     if "RSI" in top_feat:
-        reasoning += "The AI is currently prioritizing overall momentum and overbought/oversold levels to time this entry."
+        reasoning += "Oscillator exhaustion factored into primary threshold logic."
     elif "BB" in top_feat or "SMA" in top_feat:
-        reasoning += "The model is focused on mean-reversion, specifically how far the price has deviated from its historical average."
+        reasoning += "Mean-reversion deviation exceeds normal distributional bounds."
     elif "Return" in top_feat:
-        reasoning += "The engine is 'chasing' the immediate short-term trend, betting on a continuation of today's price velocity."
+        reasoning += "Velocity-based momentum continuation projected."
     else:
-        reasoning += "This indicator is providing the highest statistical signal for predicting tomorrow's direction based on historical patterns."
-
-    # 4. The "Reality Check" (Risk)
-    risk = f"**Risk Assessment:** Historically, this system has a **{win_rate:.1f}% Win Rate** on {ticker}. "
-    if sharpe < 0.5:
-        risk += f"The Sharpe Ratio of {sharpe:.2f} is relatively low, meaning that while the system is profitable, the price action for {ticker} can be extremely 'choppy' and volatile. **Strict stop-losses are mandatory.**"
-    elif sharpe > 1.0:
-        risk += f"The Sharpe Ratio of {sharpe:.2f} is excellent, indicating this has historically been a very smooth and reliable trend for the AI to capture."
-    else:
-        risk += f"The Sharpe Ratio of {sharpe:.2f} indicates moderate risk-adjusted returns."
+        reasoning += "Vector aligns with historically profitable structural setups."
 
     return {
         "edge": edge,
         "catalyst": catalyst,
-        "reasoning": reasoning,
-        "risk": risk
+        "reasoning": reasoning
     }
 
-st.set_page_config(page_title="Quant AI Dashboard", layout="wide")
+def get_market_status():
+    utcnow = datetime.datetime.now(pytz.utc)
+    day = utcnow.weekday()
+    
+    # India Market Hours (NSE: 9:15 AM to 3:30 PM IST)
+    ist_tz = pytz.timezone('Asia/Kolkata')
+    ist_now = utcnow.astimezone(ist_tz)
+    ind_open = (ist_now.hour > 9 or (ist_now.hour == 9 and ist_now.minute >= 15)) and \
+               (ist_now.hour < 15 or (ist_now.hour == 15 and ist_now.minute < 30))
+    ind_status = "OPEN" if ind_open and day < 5 else "CLOSED"
+    ind_color = "#22C55E" if ind_status == "OPEN" else "#EF4444"
+    
+    # US Market Hours (NYSE: 9:30 AM to 4:00 PM EST)
+    est_tz = pytz.timezone('US/Eastern')
+    est_now = utcnow.astimezone(est_tz)
+    us_open = (est_now.hour > 9 or (est_now.hour == 9 and est_now.minute >= 30)) and \
+              (est_now.hour < 16)
+    us_status = "OPEN" if us_open and day < 5 else "CLOSED"
+    us_color = "#22C55E" if us_status == "OPEN" else "#EF4444"
+    
+    return ind_status, ind_color, us_status, us_color
 
-st.title("AI Quantitative Trading Intelligence System")
-st.markdown("Predictive analysis using Machine Learning, Technical Indicators, and FinBERT News Sentiment. Assesses probabilities of daily market movements.")
+ind_st, ind_col, us_st, us_col = get_market_status()
 
-# Sidebar for inputs
-st.sidebar.header("System Parameters")
-ticker = st.sidebar.text_input("Stock Ticker", "RELIANCE.NS")
+# --- MAIN APP ---
+col_head1, col_head2 = st.columns([4, 1])
+with col_head1:
+    st.markdown("<h1 style='color: #E5E5E5; margin-bottom: 0px;'>QUANT<span style='color: #3B82F6;'>AI</span> TRADER</h1>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #9CA3AF; font-size: 0.9rem; margin-top: -5px;'>INSTITUTIONAL PREDICTIVE TERMINAL</p>", unsafe_allow_html=True)
+with col_head2:
+    st.markdown(f"""
+    <div style="text-align: right; color: #9CA3AF; font-size: 0.75rem; font-family: monospace; margin-top: 5px;">
+        US MARKET: <span style="color: {us_col}; font-weight: bold;">{us_st}</span><br>
+        IND MARKET: <span style="color: {ind_col}; font-weight: bold;">{ind_st}</span><br>
+        SYSTEM: <span style="color: #22C55E; font-weight: bold;">CALIBRATED</span>
+    </div>
+    """, unsafe_allow_html=True)
 
-# Restricting the data length helps test the "Recent Regime" hypothesis.
+st.markdown("<hr style='margin-top: 0px;'>", unsafe_allow_html=True)
+
+# Sidebar
+st.sidebar.markdown("<h3 style='color: #E5E5E5; margin-top: 0px;'>TERMINAL CONTROLS</h3>", unsafe_allow_html=True)
+ticker = st.sidebar.text_input("ASSET TICKER", "RELIANCE.NS")
+
 period_map = {
     "Auto-Optimize (Best Sharpe)": "auto",
     "Max Available Data": None,
@@ -90,34 +401,33 @@ period_map = {
     "Last 6 Months": 0.5,
     "Last 3 Months": 0.25
 }
-selected_period = st.sidebar.selectbox("Training Data Period", list(period_map.keys()), index=0)
+selected_period = st.sidebar.selectbox("TRAINING HORIZON", list(period_map.keys()), index=0)
 lookback = period_map[selected_period]
 
-run_btn = st.sidebar.button("Run Intelligence Engine")
+run_btn = st.sidebar.button("EXECUTE PIPELINE")
 
 st.sidebar.markdown("---")
-st.sidebar.info("""
-**How this works:**
-1. Downloader gets market prices.
-2. Google News fetches headlines.
-3. FinBERT scores news sentiment.
-4. Technical indicators (TA) created.
-5. Emsemble ML Models train on history.
-6. VectorBT backtests simulated returns.
-""")
+st.sidebar.markdown("""
+<div style="font-size: 0.8rem; color: #6B7280; font-family: monospace;">
+    <strong>PIPELINE TOPOLOGY:</strong><br><br>
+    [1] Data Ingestion<br>
+    [2] NLP Sentiment Parsing<br>
+    [3] Mathematical Feature Gen<br>
+    [4] Ensemble Training<br>
+    [5] Probability Calibration<br>
+    [6] VectorBT Simulation
+</div>
+""", unsafe_allow_html=True)
 
 if run_btn:
-    with st.spinner(f"Fetching data, computing TA, and training ML models for {ticker}... (This may take up to 20 seconds for Auto-Optimization)"):
+    with st.spinner(f"INITIALIZING PIPELINE FOR {ticker}... [AUTO-OPT: {lookback == 'auto'}]"):
         best_sharpe = -float('inf')
         best_res = None
         best_metrics = None
         best_oos_preds = None
         selected_lookback_str = ""
 
-        # Determine periods to test
         if lookback == "auto":
-            # Skipping Max to save time and because deep history is often noisy, 
-            # but testing all recent regimes.
             periods_to_test = [
                 ("Last 3 Years", 3.0), 
                 ("Last 2 Years", 2.0), 
@@ -148,17 +458,14 @@ if run_btn:
                 win_rate = metrics_temp.get('Win Rate (%)', 0.0)
                 trades = metrics_temp.get('Total Trades', 0)
                 
-                # Handing vectorbt NaN / Infinity edge cases when trades == 0
                 if pd.isna(sharpe) or np.isinf(sharpe) or trades == 0:
                     sharpe = -100.0
                 if pd.isna(win_rate) or np.isinf(win_rate):
                     win_rate = 0.0
                     
-                # User request: Sensible upper limit to prevent selecting overfitted outliers
                 if sharpe > 3.0:
                     sharpe = 3.0
                 
-                # Maximizing Sharpe. If Sharpe is equal (e.g., both 0 or no trades), use win rate to tie-break
                 if sharpe > best_sharpe or (sharpe == best_sharpe and win_rate > best_metrics.get('Win Rate (%)', 0.0)):
                     best_sharpe = sharpe
                     best_res = res
@@ -167,12 +474,10 @@ if run_btn:
                     selected_lookback_str = p_name
                     
             except Exception as e:
-                print(f"Failed for period {p_name}: {e}")
                 continue
 
         if best_res is None:
-            st.error("Execution Error: Failed on all timeframes.")
-            st.warning("Troubleshooting Tips:\n1. If this is a recent IPO, data is only available from its public listing date.\n2. Ensure the ticker symbol exactly matches Yahoo Finance.")
+            st.error("SYSTEM HALTED: Execution failed. Verify ticker liquidity and data availability.")
             res = None
         else:
             res = best_res
@@ -182,162 +487,218 @@ if run_btn:
         oos_preds = best_oos_preds
         metrics = best_metrics
         
-        # Display Optimization Note
-        if lookback == "auto":
-            st.success(f"⚡ **Auto-Optimizer:** Model automatically selected **{selected_lookback_str}** training data for the highest Risk-Adjusted Return (Sharpe: {best_sharpe:.2f}).")
-        else:
-            st.info(f"Using manual training data period: **{selected_lookback_str}**")
-
-        # Current Price & Data
-        latest_price = df['Close'].iloc[-1]
-        prev_price = df['Close'].iloc[-2]
+        # Determine signals
+        # Override historical close with true live spot price if available
+        try:
+            import yfinance as yf
+            live_ticker = yf.Ticker(ticker)
+            t_info = live_ticker.info
+            latest_price = t_info.get('regularMarketPrice', live_ticker.fast_info['lastPrice'])
+            prev_price = t_info.get('previousClose', live_ticker.fast_info['previousClose'])
+            # Fallbacks just in case
+            if pd.isna(latest_price): latest_price = df['Close'].iloc[-1]
+            if pd.isna(prev_price): prev_price = df['Close'].iloc[-2]
+        except Exception:
+            latest_price = df['Close'].iloc[-1]
+            prev_price = df['Close'].iloc[-2]
+            
         change = ((latest_price - prev_price) / prev_price) * 100
-
-        # --- 1. Top Level Metrics & Profile ---
-        st.subheader(f"📊 Trading Profile: {ticker}")
         
-        col1, col2, col3 = st.columns(3)
-        col1.metric("Asset Price", f"{latest_price:.2f}", f"{change:.2f}%")
-        
-        # The exact elite orthogonal features in the EXACT sequence the models were trained on
         m_sample = next(iter(models.values()))
         trained_features = list(m_sample.feature_names_in_)
-        
         X = df[trained_features].ffill().fillna(0)
-        
-        # Recent Sentiment
         recent_sentiment = df['avg_sentiment'].iloc[-1]
         
-        # Multi-Model Continuous Probabilities via Calibration
         latest_features = X.iloc[-1:]
         probas = []
         for name, m in models.items():
             try:
                 prob = m.predict_proba(latest_features)[0][1]
-            except Exception:
-                # Fallback if a specific model failed to train class probabilities
+            except:
                 prob = m.predict(latest_features)[0]
             probas.append(prob)
         
-        # Exact calibrated statistical mean probability
         avg_prob = sum(probas) / len(probas)
         
-        # Signal Generation (Based on Statistical Edges)
         if avg_prob >= 0.65:
-            signal = "BUY (Strong)"
+            signal_txt = "BUY"
+            signal_cls = "signal-BUY"
+            signal_sub = "STRONG CONVICTION"
             conf = avg_prob * 100
         elif avg_prob > 0.50:
-            signal = "HOLD (Weak Buy)"
+            signal_txt = "HOLD/BUY"
+            signal_cls = "signal-HOLD"
+            signal_sub = "WEAK CONVICTION"
             conf = avg_prob * 100
         elif avg_prob <= 0.35:
-            signal = "SELL (Strong)"
+            signal_txt = "SELL"
+            signal_cls = "signal-SELL"
+            signal_sub = "STRONG CONVICTION"
             conf = (1.0 - avg_prob) * 100
         else:
-            signal = "HOLD (Weak Sell)"
+            signal_txt = "HOLD/SELL"
+            signal_cls = "signal-HOLD"
+            signal_sub = "WEAK CONVICTION"
             conf = (1.0 - avg_prob) * 100
 
-        col2.metric("AI Calibrated Signal", signal)
-        col3.metric("True Probability", f"{conf:.1f}%")
+        # Optimization Note
+        if lookback == "auto":
+            st.markdown(f"""
+            <div style="background: rgba(34, 197, 94, 0.1); border-left: 3px solid #22C55E; padding: 10px; margin-bottom: 20px; font-size: 0.85rem; color: #A7F3D0;">
+                OVERRIDE: Auto-Optimizer selected <strong>{selected_lookback_str}</strong> horizon. Risk-Adjusted Return (Sharpe: {best_sharpe:.2f}).
+            </div>
+            """, unsafe_allow_html=True)
 
-        # Visualizations
-        st.write("---")
-        st.subheader(f"Price Action Profile ({ticker})")
+        # --- GRID LAYOUT ---
+        # SECTION A & E: Signal and Metrics (Unified Card)
+        display_win = metrics.get('Win Rate (%)', 0.0)
+        display_win_str = "0.00%" if pd.isna(display_win) else f"{display_win:.2f}%"
+        s_yield = metrics.get('Strategy Total Return (%)', 0.0)
+        s_ratio = metrics.get('Sharpe Ratio', 0.0)
         
+        # Color logic
+        c_price = "#22C55E" if change > 0 else "#EF4444"
+        c_yield = "#22C55E" if s_yield > 0 else "#EF4444" if s_yield < 0 else "#FFFFFF"
+        c_ratio = "#22C55E" if s_ratio > 0 else "#EF4444" if s_ratio < 0 else "#FFFFFF"
+        
+        metrics_html = f"""
+        <div class="unified-metrics-card">
+            <div class="metric-segment signal-area">
+                <p style="margin:0; font-size: 0.75rem; color: #9CA3AF; letter-spacing: 1px; text-transform: uppercase;">Algorithmic Signal</p>
+                <h1 class="{signal_cls}" style="margin: 5px 0; font-size: 2.2rem; font-weight: 600; line-height: 1;">{signal_txt}</h1>
+                <p style="margin:0; font-size: 0.8rem; color: #D1D5DB;">{signal_sub} • {conf:.1f}% PROBABILITY</p>
+            </div>
+            <div class="metric-segment">
+                <p style="margin:0; font-size: 0.7rem; color: #9CA3AF; text-transform: uppercase;">Asset Price</p>
+                <h2 style="margin: 5px 0; font-size: 1.6rem; color: {c_price}; font-family: 'IBM Plex Sans';">{latest_price:.2f}</h2>
+                <p style="margin:0; font-size: 0.65rem; color: #6B7280;">{change:+.2f}% Daily</p>
+            </div>
+            <div class="metric-segment">
+                <p style="margin:0; font-size: 0.7rem; color: #9CA3AF; text-transform: uppercase;">Win Rate</p>
+                <h2 style="margin: 5px 0; font-size: 1.6rem; color: #FFFFFF; font-family: 'IBM Plex Sans';">{display_win_str}</h2>
+                <p style="margin:0; font-size: 0.65rem; color: #6B7280;">{int(metrics.get('Total Trades', 0))} Trades</p>
+            </div>
+            <div class="metric-segment">
+                <p style="margin:0; font-size: 0.7rem; color: #9CA3AF; text-transform: uppercase;">Strategy Yield</p>
+                <h2 style="margin: 5px 0; font-size: 1.6rem; color: {c_yield}; font-family: 'IBM Plex Sans';">{s_yield:.2f}%</h2>
+                <p style="margin:0; font-size: 0.65rem; color: #6B7280;">B&H: {metrics.get('Benchmark Total Return (%)', 0.0):.2f}%</p>
+            </div>
+            <div class="metric-segment">
+                <p style="margin:0; font-size: 0.7rem; color: #9CA3AF; text-transform: uppercase;">Sharpe Ratio</p>
+                <h2 style="margin: 5px 0; font-size: 1.6rem; color: {c_ratio}; font-family: 'IBM Plex Sans';">{s_ratio:.2f}</h2>
+                <p style="margin:0; font-size: 0.65rem; color: #6B7280;">Risk-Adjusted</p>
+            </div>
+        </div>
+        """
+        st.markdown(metrics_html.replace('\n', ' '), unsafe_allow_html=True)
+
+        # SECTION B: Multi-Chart Plotly Override
+        st.markdown("<br>", unsafe_allow_html=True)
+        st.markdown("<h4 style='color: #E5E5E5; margin-bottom: 10px;'>PRICE ACTION TERMINAL</h4>", unsafe_allow_html=True)
+        
+        plot_df = df.iloc[-200:]
         fig = go.Figure()
-        # Candlestick or Line
-        fig.add_trace(go.Scatter(x=df.index[-200:], y=df['Close'].iloc[-200:], mode='lines', name='Close Price', line=dict(color='royalblue')))
-        if 'BB_High' in df.columns:
-             fig.add_trace(go.Scatter(x=df.index[-200:], y=df['BB_High'].iloc[-200:], mode='lines', name='BB High', line=dict(color='gray', dash='dash')))
-             fig.add_trace(go.Scatter(x=df.index[-200:], y=df['BB_Low'].iloc[-200:], mode='lines', name='BB Low', line=dict(color='gray', dash='dash')))
         
-        fig.update_layout(height=400, margin=dict(l=0, r=0, t=30, b=0))
+        fig.add_trace(go.Candlestick(
+            x=plot_df.index,
+            open=plot_df['Open'], high=plot_df['High'],
+            low=plot_df['Low'], close=plot_df['Close'],
+            name='Price Structure',
+            increasing_line_color='#22C55E', decreasing_line_color='#EF4444'
+        ))
+        
+        if 'SMA_20' in plot_df.columns:
+            fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['SMA_20'], line=dict(color='#3B82F6', width=1), name='SMA 20'))
+        if 'BB_High' in plot_df.columns:
+            fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['BB_High'], line=dict(color='#4B5563', dash='dot', width=1), name='BB High'))
+            fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['BB_Low'], line=dict(color='#4B5563', dash='dot', width=1), name='BB Low'))
+
+        fig.update_layout(
+            template='plotly_dark',
+            paper_bgcolor='rgba(0,0,0,0)',
+            plot_bgcolor='rgba(0,0,0,0)',
+            margin=dict(l=0, r=0, t=10, b=0),
+            height=450,
+            xaxis=dict(showgrid=False, zeroline=False, rangeslider=dict(visible=False)),
+            yaxis=dict(showgrid=True, gridcolor='#1A1A1A', zeroline=False)
+        )
         st.plotly_chart(fig, use_container_width=True)
 
-        # --- AI Intelligence Report (Virtual Analyst) ---
-        st.write("---")
-        with st.container():
-            st.subheader("🧠 AI Intelligence Report & Executive Summary")
-            report = generate_ai_commentary(ticker, signal, conf, recent_sentiment, feat_imp, metrics, df)
+        # SECTION C & D: Intelligence & Regime
+        col_c, col_d = st.columns([2, 2])
+        
+        with col_c:
+            st.markdown("<h4 style='color: #E5E5E5;'>MODEL FEATURE IMPORTANCE</h4>", unsafe_allow_html=True)
+            top_feats = feat_imp.head(10).sort_values(ascending=True)
             
-            c1, c2 = st.columns(2)
-            with c1:
-                st.info(f"### The Strategy Edge\n{report['edge']}")
-                st.info(f"### The Market Catalyst\n{report['catalyst']}")
-            with c2:
-                st.success(f"### Mathematical Reasoning\n{report['reasoning']}")
-                st.warning(f"### Transparency & Risk\n{report['risk']}")
+            fig_bar = go.Figure(go.Bar(
+                x=top_feats.values,
+                y=top_feats.index,
+                orientation='h',
+                marker=dict(color='#3B82F6', line=dict(color='#0B0B0B', width=1))
+            ))
+            fig_bar.update_layout(
+                template='plotly_dark',
+                paper_bgcolor='rgba(0,0,0,0)',
+                plot_bgcolor='rgba(0,0,0,0)',
+                margin=dict(l=0, r=0, t=10, b=0),
+                height=250,
+                xaxis=dict(showgrid=True, gridcolor='#1A1A1A', zeroline=False),
+                yaxis=dict(showgrid=False)
+            )
+            st.plotly_chart(fig_bar, use_container_width=True)
 
-        colA, colB = st.columns(2)
-        
-        with colA:
-            st.subheader("Model Feature Importance")
-            st.bar_chart(feat_imp.head(10))
+        with col_d:
+            st.markdown("<h4 style='color: #E5E5E5;'>STRUCTURAL INTELLIGENCE</h4>", unsafe_allow_html=True)
+            report = generate_ai_commentary(ticker, signal_txt, conf, recent_sentiment, feat_imp, metrics, df)
             
-        with colB:
-            st.subheader("Market Context")
-            st.write(f"**Latest Average Sentiment:** {recent_sentiment:.2f} (Scale: -1 to +1)")
-            st.write(f"**Current RSI (14):** {df['RSI_14'].iloc[-1]:.2f}")
-            macd_sgn = "Bullish" if df['MACD'].iloc[-1] > df['MACD_Signal'].iloc[-1] else "Bearish"
-            st.write(f"**Current MACD Trend:** {macd_sgn}")
             volatility = df['Risk_Level'].iloc[-1] * 100
-            st.write(f"**Systematic Volatility (20-day):** {volatility:.2f}%")
             
-        # --- Data Transparency & Explainability ---
-        st.write("---")
-        st.subheader("Data Transparency & AI Decision Log")
-        st.markdown("Building trust requires transparency. Below is the exact live data the intelligence engine processed to calculate the confidence score.")
+            st.markdown(f"""
+            <div class="quant-card" style="font-size: 0.85rem; color: #D1D5DB; line-height: 1.6;">
+                <strong style="color: #3B82F6;">[01] SYSTEMATIC VOLATILITY:</strong> {volatility:.2f}%<br>
+                <strong style="color: #3B82F6;">[02] STATISTICAL EDGE:</strong> {report['edge']}<br>
+                <strong style="color: #3B82F6;">[03] NLP DRIFT ANALYSIS:</strong> {report['catalyst']}<br>
+                <strong style="color: #3B82F6;">[04] STRUCTURAL VECTOR:</strong> {report['reasoning']}
+            </div>
+            """, unsafe_allow_html=True)
+
+        st.markdown("---")
+        st.markdown("<h4 style='color: #E5E5E5;'>DATA TRANSPARENCY & VALIDATION LOG</h4>", unsafe_allow_html=True)
         
-        tcol1, tcol2, tcol3 = st.columns(3)
+        col_t1, col_t2, col_t3 = st.columns(3)
         
-        with tcol1:
-            st.markdown("#### 1. Why Did The AI Choose This?")
-            st.markdown("These are the Top 5 mathematical drivers that influenced the algorithm, along with their values today:")
+        with col_t1:
+            st.markdown("<span style='color:#9CA3AF; font-size:0.8rem; letter-spacing:1px; text-transform:uppercase;'>[01] Structural Vectors</span>", unsafe_allow_html=True)
             top_5_feats = feat_imp.head(5).index.tolist()
+            text_html = "<div class='quant-card' style='font-family: monospace; font-size: 0.8rem; color:#E5E5E5;'>"
             for feat in top_5_feats:
                 current_val = df[feat].iloc[-1]
-                st.write(f"- **{feat}**: `{current_val:.4f}`")
-                
-        with tcol2:
-            st.markdown("#### 2. Raw Market Inputs")
-            st.markdown("The most recent OHLCV market history used for the technical indicators:")
+                text_html += f"<div style='border-left: 2px solid #3B82F6; padding-left: 8px; margin-bottom: 5px;'><strong>{feat}</strong>: {current_val:.4f}</div>"
+            text_html += "</div>"
+            st.markdown(text_html, unsafe_allow_html=True)
+            
+        with col_t2:
+            st.markdown("<span style='color:#9CA3AF; font-size:0.8rem; letter-spacing:1px; text-transform:uppercase;'>[02] Raw Execution Inputs</span>", unsafe_allow_html=True)
             st.dataframe(df[['Open', 'High', 'Low', 'Close', 'Volume']].tail(5), use_container_width=True)
             
-        with tcol3:
-            st.markdown("#### 3. Live News Feed")
-            st.markdown("The exact headlines fetched and scored by the FinBERT NLP engine:")
+        with col_t3:
+            st.markdown("<span style='color:#9CA3AF; font-size:0.8rem; letter-spacing:1px; text-transform:uppercase;'>[03] Live NLP Feed</span>", unsafe_allow_html=True)
             recent_news = fetch_google_news(ticker, max_results=5)
+            news_html = "<div class='quant-card' style='font-family: Inter; font-size: 0.75rem; color:#D1D5DB;'>"
             if not recent_news.empty:
                 for idx, row in recent_news.iterrows():
                     pub_str = str(row['published_at'])[:10]
-                    st.markdown(f"- **{pub_str}**: [{row['title']}]({row['link']})")
+                    news_html += f"<div style='margin-bottom:8px;'><span style='color:#3B82F6'>{pub_str}</span> <a href='{row['link']}' style='color:#E5E5E5; text-decoration:none;'>{row['title']}</a></div>"
             else:
-                st.write("*No recent news found for this ticker.*")
-        
-        # Backtest Report (USING OUT-OF-SAMPLE DATA)
-        st.write("---")
-        st.subheader("Historical VectorBT Simulation (Out-Of-Sample)")
-        st.markdown("This backtest uses **Walk-Forward Validation**. It only shows performance on data the AI had *never seen before* making each trade. This is a realistic representation of real-world performance.")
-        
-        # Align DF with OOS signals
-        # (Moved up for metrics availability)
-        
-        bcol1, bcol2, bcol3, bcol4 = st.columns(4)
-        bcol1.metric("Strategy Yield", f"{metrics['Strategy Total Return (%)']:.2f}%")
-        bcol2.metric("Buy & Hold Yield", f"{metrics['Benchmark Total Return (%)']:.2f}%")
-        
-        # Clean up NaNs for display
-        display_win = metrics['Win Rate (%)']
-        display_win = f"{display_win:.2f}%" if not pd.isna(display_win) else "0.00%"
-        
-        display_sharpe = metrics['Sharpe Ratio']
-        if pd.isna(display_sharpe) or np.isinf(display_sharpe):
-            display_sharpe = "0.00"
-        else:
-             # Apply the aesthetic cap for reporting if it was capped during optimization
-             if display_sharpe > 3.0: display_sharpe = 3.0
-             display_sharpe = f"{display_sharpe:.2f}"
-             
-        bcol3.metric("Win Rate", display_win)
-        bcol4.metric("Sharpe Ratio", display_sharpe)
+                news_html += "NO RECENT DATA"
+            news_html += "</div>"
+            st.markdown(news_html, unsafe_allow_html=True)
 
-        st.success("Analysis Complete. Pipeline execution successful.")
+        st.markdown("<br>", unsafe_allow_html=True)
+        st.markdown("""
+        <div style="text-align: center; color: #4B5563; font-size: 0.7rem; font-family: monospace;">
+            QUANT-AI PREDICTIVE TERMINAL V2.0 • ALGORITHMIC EXECUTION MODULE<br>
+            STRICTLY NO FINANCIAL ADVICE
+        </div>
+        """, unsafe_allow_html=True)
