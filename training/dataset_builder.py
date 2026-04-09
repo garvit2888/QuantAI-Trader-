@@ -2,6 +2,7 @@ import pandas as pd
 import numpy as np
 from sklearn.model_selection import TimeSeriesSplit
 import warnings
+from typing import Optional
 
 warnings.filterwarnings('ignore')
 
@@ -44,7 +45,18 @@ def get_train_test_splits(X, y, n_splits=5):
     tscv = TimeSeriesSplit(n_splits=n_splits)
     return list(tscv.split(X, y))
 
-from typing import Optional
+def get_benchmark_index(ticker: str) -> str:
+    """
+    Map stock ticker to its geographic benchmark index.
+    """
+    t = ticker.upper()
+    if t.endswith(".NS"): return "^NSEI"     # Nifty 50
+    if t.endswith(".BO"): return "^BSESN"    # Sensex
+    if t.endswith(".L"):  return "^FTSE"     # FTSE 100
+    if t.endswith(".AS"): return "^AEX"      # AEX
+    if t.endswith(".HK"): return "^HSI"      # Hang Seng
+    # Default to US S&P 500 for US stocks or unknown
+    return "^GSPC"
 
 def prepare_dataset(ticker: str, horizon: int = 1, lookback_years: Optional[float] = None):
     """
@@ -86,30 +98,57 @@ def prepare_dataset(ticker: str, horizon: int = 1, lookback_years: Optional[floa
     # 2. Add Tech Indicators
     df = add_technical_indicators(df)
     
-    # 3. Add Sentiment
+    # 3. Add Market Guardrail (Benchmark Index)
+    try:
+        benchmark_ticker = get_benchmark_index(ticker)
+        print(f"📊 Market Guardrail: Syncing benchmark index {benchmark_ticker}...")
+        bench_df = fetch_stock_data(benchmark_ticker)
+        if not bench_df.empty:
+            bench_df = bench_df[['Close']].rename(columns={'Close': 'Index_Close'})
+            bench_df['Index_Return'] = bench_df['Index_Close'].pct_change()
+            
+            # Merge with main df
+            df = df.join(bench_df[['Index_Return']], how='left')
+            df['Index_Return'] = df['Index_Return'].ffill().fillna(0.0)
+            
+            # Feature engineering: Market Relative Performance
+            df['Market_Relative_Return'] = df['Daily_Return'] - df['Index_Return']
+    except Exception as e:
+        print(f"⚠️ Market Guardrail sync failed: {e}")
+
+    # 4. Add Sentiment
     # Cap to 10 to massively speed up FinBERT CPU inference time
-    news = fetch_google_news(ticker, max_results=10)
-    sentiment_df = compute_daily_sentiment(news)
-    
-    # Merge Sentiment
-    df = df.reset_index()
-    if not sentiment_df.empty:
-        df['Date'] = pd.to_datetime(df['Date']).dt.date
-        sentiment_df['Date'] = pd.to_datetime(sentiment_df['Date']).dt.date
+    try:
+        from data.news_loader import fetch_google_news
+        from sentiment.sentiment_analyzer import compute_daily_sentiment
         
-        # Left join to preserve all market days
-        df = pd.merge(df, sentiment_df, on='Date', how='left')
+        news = fetch_google_news(ticker, max_results=10)
+        sentiment_df = compute_daily_sentiment(news)
         
-    if 'avg_sentiment' not in df.columns:
-        df['avg_sentiment'] = 0.0
-        df['news_count'] = 0.0
-    else:
-        # Forward fill recent sentiment (e.g. weekend news to Monday, or yesterday to today)
-        df['avg_sentiment'] = df['avg_sentiment'].ffill(limit=5).fillna(0.0)
-        df['news_count'] = df['news_count'].ffill(limit=5).fillna(0.0)
-        
-    df['Date'] = pd.to_datetime(df['Date'])
-    df = df.set_index('Date')
+        # Merge Sentiment
+        df = df.reset_index()
+        if not sentiment_df.empty:
+            df['Date'] = pd.to_datetime(df['Date']).dt.date
+            sentiment_df['Date'] = pd.to_datetime(sentiment_df['Date']).dt.date
+            
+            # Left join to preserve all market days
+            df = pd.merge(df, sentiment_df, on='Date', how='left')
+            
+        if 'avg_sentiment' not in df.columns:
+            df['avg_sentiment'] = 0.0
+            df['news_count'] = 0.0
+        else:
+            # Forward fill recent sentiment (e.g. weekend news to Monday, or yesterday to today)
+            df['avg_sentiment'] = df['avg_sentiment'].ffill(limit=5).fillna(0.0)
+            df['news_count'] = df['news_count'].ffill(limit=5).fillna(0.0)
+            
+        df['Date'] = pd.to_datetime(df['Date'])
+        df = df.set_index('Date')
+    except Exception as e:
+        print(f"⚠️ Sentiment analysis failed: {e}")
+        if 'avg_sentiment' not in df.columns:
+            df['avg_sentiment'] = 0.0
+            df['news_count'] = 0.0
         
     # 4. Create Targets
     df = create_targets(df, horizon=horizon)

@@ -109,16 +109,22 @@ st.markdown("""
     /* Responsive Grid Layouts */
     .unified-metrics-card {
         display: flex;
-        flex-direction: row;
-        justify-content: space-between;
-        align-items: center;
-        border-left: 4px solid #3B82F6;
+        flex-direction: column;
+        gap: 20px;
         padding: 20px;
         background: rgba(11, 11, 11, 0.7);
         backdrop-filter: blur(10px);
         -webkit-backdrop-filter: blur(10px);
         border: 1px solid #1A1A1A;
         border-radius: 8px;
+    }
+    
+    .metrics-row {
+        display: flex;
+        flex-direction: row;
+        justify-content: space-between;
+        align-items: center;
+        width: 100%;
     }
     
     .metric-segment {
@@ -131,9 +137,11 @@ st.markdown("""
         border-right: none;
     }
     .metric-segment.signal-area {
-        flex: 2;
+        flex: 1.5;
         text-align: left;
         padding-right: 15px;
+        border-left: 4px solid #3B82F6;
+        padding-left: 15px;
     }
     
     /* Mobile Media Queries */
@@ -305,7 +313,7 @@ def render_kpi_card(title, value, subtitle="", highlight=False):
     </div>
     """, unsafe_allow_html=True)
 
-def generate_ai_commentary(ticker, signal, conf, sentiment, feat_imp, metrics, df):
+def generate_ai_commentary(ticker, signal, conf, sentiment, feat_imp, metrics, df, regime_info):
     """
     Generate a human-readable trading summary based on all system outputs.
     Formatted strictly for professional UI.
@@ -313,8 +321,10 @@ def generate_ai_commentary(ticker, signal, conf, sentiment, feat_imp, metrics, d
     top_feat = feat_imp.index[0]
     top_val = df[top_feat].iloc[-1]
     
+    reg_name, _ = regime_info
+    
     # 1. Consensus & The "Edge"
-    edge = f"Calibrated Ensemble indicates {conf:.1f}% probability of directional continuation. "
+    edge = f"Calibrated Ensemble indicates {conf:.1f}% probability in a {reg_name} regime. "
     if conf >= 75:
         edge += "Statistical advantage threshold met. Historical mapping validates high-conviction probability."
     elif conf >= 65:
@@ -341,10 +351,24 @@ def generate_ai_commentary(ticker, signal, conf, sentiment, feat_imp, metrics, d
     else:
         reasoning += "Vector aligns with historically profitable structural setups."
 
+    # 4. Market Guardrail (The Veto)
+    mkt_ret = df['Index_Return'].iloc[-1]
+    total_trades = metrics.get('Total Trades', 0)
+    
+    if total_trades < 15:
+        veto = f"⚠️ STATISTICAL VETO: Only {int(total_trades)} historical trades found. This signal is rejected due to insufficient proof of edge."
+    elif mkt_ret < -0.015:
+        veto = f"⚠️ MARKET CRASH VETO: {reg_name} is selling off aggressively ({mkt_ret*100:.1f}%). All BUY signals are high-risk. Capital preservation is priority."
+    elif mkt_ret < -0.005:
+        veto = f"⚠️ MARKET WEAKNESS: Benchmarks are down. Sector correlation might drag this asset lower regardless of conviction."
+    else:
+        veto = f"✅ MARKET SYNC: Global benchmarks are stable. This signal is mathematically unencumbered by macro noise."
+
     return {
         "edge": edge,
         "catalyst": catalyst,
-        "reasoning": reasoning
+        "reasoning": reasoning,
+        "veto": veto
     }
 
 def get_market_status():
@@ -432,8 +456,7 @@ if run_btn:
                 ("Last 3 Years", 3.0), 
                 ("Last 2 Years", 2.0), 
                 ("Last 1 Year", 1.0), 
-                ("Last 6 Months", 0.5),
-                ("Last 3 Months", 0.25)
+                ("Last 6 Months", 0.5)
             ]
         else:
             periods_to_test = [(selected_period, lookback)]
@@ -444,7 +467,7 @@ if run_btn:
                 if res is None:
                     continue
                 
-                models_temp, df_temp, feat_imp_temp, oos_signals_temp = res
+                models_temp, df_temp, feat_imp_temp, oos_signals_temp, scaler_temp, pca_temp, trained_features_temp, regime_detector_temp = res
                 
                 if "Ensemble" in oos_signals_temp:
                     oos_preds_temp = oos_signals_temp["Ensemble"]
@@ -463,14 +486,16 @@ if run_btn:
                 if pd.isna(win_rate) or np.isinf(win_rate):
                     win_rate = 0.0
                     
-                if sharpe > 3.0:
-                    sharpe = 3.0
+                # STATISTICAL GUARDRAIL: Penalize low sample size
+                if trades < 15:
+                    sharpe = sharpe * 0.1 # Heavily de-weight unreliable results
                 
-                if sharpe > best_sharpe or (sharpe == best_sharpe and win_rate > best_metrics.get('Win Rate (%)', 0.0)):
+                if (sharpe > best_sharpe) or (sharpe == best_sharpe and win_rate > best_metrics.get('Win Rate (%)', 0.0)):
                     best_sharpe = sharpe
                     best_res = res
                     best_metrics = metrics_temp
                     best_oos_preds = oos_preds_temp
+                    best_sharpe_raw = metrics_temp.get('Sharpe Ratio', 0.0)
                     selected_lookback_str = p_name
                     
             except Exception as e:
@@ -483,7 +508,12 @@ if run_btn:
             res = best_res
 
     if res is not None:
-        models, df, feat_imp, oos_signals = res
+        models, df, feat_imp, oos_signals, scaler, pca, trained_features_raw, regime_detector = res
+        
+        # Identify benchmark for UI
+        benchmark_ticker = "^NSEI" if ticker.upper().endswith(".NS") else "^GSPC"
+        benchmark_name = "Nifty 50" if benchmark_ticker == "^NSEI" else "S&P 500"
+        
         oos_preds = best_oos_preds
         metrics = best_metrics
         
@@ -504,23 +534,33 @@ if run_btn:
             
         change = ((latest_price - prev_price) / prev_price) * 100
         
-        m_sample = next(iter(models.values()))
-        trained_features = list(m_sample.feature_names_in_)
-        X = df[trained_features].ffill().fillna(0)
+        X = df[trained_features_raw].ffill().fillna(0)
         recent_sentiment = df['avg_sentiment'].iloc[-1]
         
-        latest_features = X.iloc[-1:]
+        latest_features_raw = X.iloc[-1:]
+        # Apply Spectral Denoising (Scaling + PCA) to live features
+        latest_features_scaled = scaler.transform(latest_features_raw)
+        latest_features = pca.transform(latest_features_scaled)
+        
         probas = []
         for name, m in models.items():
             try:
+                # Sklearn objects expect 2D array, which pca.transform already returns
                 prob = m.predict_proba(latest_features)[0][1]
             except:
                 prob = m.predict(latest_features)[0]
             probas.append(prob)
         
+        # --- SIGNAL VETO LOGIC ---
         avg_prob = sum(probas) / len(probas)
+        total_trades = metrics.get('Total Trades', 0)
         
-        if avg_prob >= 0.65:
+        if total_trades < 15:
+            signal_txt = "HOLD"
+            signal_cls = "signal-HOLD"
+            signal_sub = "INSUFFICIENT DATA"
+            conf = avg_prob * 100
+        elif avg_prob >= 0.59:
             signal_txt = "BUY"
             signal_cls = "signal-BUY"
             signal_sub = "STRONG CONVICTION"
@@ -530,7 +570,7 @@ if run_btn:
             signal_cls = "signal-HOLD"
             signal_sub = "WEAK CONVICTION"
             conf = avg_prob * 100
-        elif avg_prob <= 0.35:
+        elif avg_prob <= 0.41:
             signal_txt = "SELL"
             signal_cls = "signal-SELL"
             signal_sub = "STRONG CONVICTION"
@@ -541,11 +581,14 @@ if run_btn:
             signal_sub = "WEAK CONVICTION"
             conf = (1.0 - avg_prob) * 100
 
+        # Regime Detection
+        reg_name, reg_color = regime_detector.predict(df)
+
         # Optimization Note
         if lookback == "auto":
             st.markdown(f"""
             <div style="background: rgba(34, 197, 94, 0.1); border-left: 3px solid #22C55E; padding: 10px; margin-bottom: 20px; font-size: 0.85rem; color: #A7F3D0;">
-                OVERRIDE: Auto-Optimizer selected <strong>{selected_lookback_str}</strong> horizon. Risk-Adjusted Return (Sharpe: {best_sharpe:.2f}).
+                OVERRIDE: Auto-Optimizer selected <strong>{selected_lookback_str}</strong> horizon. Risk-Adjusted Return (Sharpe: {best_sharpe_raw:.2f}).
             </div>
             """, unsafe_allow_html=True)
 
@@ -563,30 +606,47 @@ if run_btn:
         
         metrics_html = f"""
         <div class="unified-metrics-card">
-            <div class="metric-segment signal-area">
-                <p style="margin:0; font-size: 0.75rem; color: #9CA3AF; letter-spacing: 1px; text-transform: uppercase;">Algorithmic Signal</p>
-                <h1 class="{signal_cls}" style="margin: 5px 0; font-size: 2.2rem; font-weight: 600; line-height: 1;">{signal_txt}</h1>
-                <p style="margin:0; font-size: 0.8rem; color: #D1D5DB;">{signal_sub} • {conf:.1f}% PROBABILITY</p>
+            <div class="metrics-row" style="border-bottom: 1px solid #1A1A1A; padding-bottom: 20px;">
+                <div class="metric-segment signal-area">
+                    <p style="margin:0; font-size: 0.75rem; color: #9CA3AF; letter-spacing: 1px; text-transform: uppercase;">Algorithmic Signal</p>
+                    <h1 class="{signal_cls}" style="margin: 5px 0; font-size: 2.2rem; font-weight: 600; line-height: 1;">{signal_txt}</h1>
+                    <p style="margin:0; font-size: 0.8rem; color: #D1D5DB;">{signal_sub} • {conf:.1f}% PROBABILITY</p>
+                </div>
+                <div class="metric-segment">
+                    <p style="margin:0; font-size: 0.7rem; color: #9CA3AF; text-transform: uppercase;">Asset Price</p>
+                    <h2 style="margin: 5px 0; font-size: 1.6rem; color: {c_price}; font-family: 'IBM Plex Sans';">{latest_price:.2f}</h2>
+                    <p style="margin:0; font-size: 0.65rem; color: #6B7280;">{change:+.2f}% Daily</p>
+                </div>
+                <div class="metric-segment">
+                    <p style="margin:0; font-size: 0.7rem; color: #9CA3AF; text-transform: uppercase;">Win Rate</p>
+                    <h2 style="margin: 5px 0; font-size: 1.6rem; color: #FFFFFF; font-family: 'IBM Plex Sans';">{display_win_str}</h2>
+                    <p style="margin:0; font-size: 0.65rem; color: #6B7280;">{int(metrics.get('Total Trades', 0))} Trades</p>
+                </div>
+                <div class="metric-segment" style="border-right: none;">
+                    <p style="margin:0; font-size: 0.7rem; color: #9CA3AF; text-transform: uppercase;">Strategy Yield</p>
+                    <h2 style="margin: 5px 0; font-size: 1.6rem; color: {c_yield}; font-family: 'IBM Plex Sans';">{s_yield:.2f}%</h2>
+                    <p style="margin:0; font-size: 0.65rem; color: #6B7280;">B&H: {metrics.get('Benchmark Total Return (%)', 0.0):.2f}%</p>
+                </div>
             </div>
-            <div class="metric-segment">
-                <p style="margin:0; font-size: 0.7rem; color: #9CA3AF; text-transform: uppercase;">Asset Price</p>
-                <h2 style="margin: 5px 0; font-size: 1.6rem; color: {c_price}; font-family: 'IBM Plex Sans';">{latest_price:.2f}</h2>
-                <p style="margin:0; font-size: 0.65rem; color: #6B7280;">{change:+.2f}% Daily</p>
-            </div>
-            <div class="metric-segment">
-                <p style="margin:0; font-size: 0.7rem; color: #9CA3AF; text-transform: uppercase;">Win Rate</p>
-                <h2 style="margin: 5px 0; font-size: 1.6rem; color: #FFFFFF; font-family: 'IBM Plex Sans';">{display_win_str}</h2>
-                <p style="margin:0; font-size: 0.65rem; color: #6B7280;">{int(metrics.get('Total Trades', 0))} Trades</p>
-            </div>
-            <div class="metric-segment">
-                <p style="margin:0; font-size: 0.7rem; color: #9CA3AF; text-transform: uppercase;">Strategy Yield</p>
-                <h2 style="margin: 5px 0; font-size: 1.6rem; color: {c_yield}; font-family: 'IBM Plex Sans';">{s_yield:.2f}%</h2>
-                <p style="margin:0; font-size: 0.65rem; color: #6B7280;">B&H: {metrics.get('Benchmark Total Return (%)', 0.0):.2f}%</p>
-            </div>
-            <div class="metric-segment">
-                <p style="margin:0; font-size: 0.7rem; color: #9CA3AF; text-transform: uppercase;">Sharpe Ratio</p>
-                <h2 style="margin: 5px 0; font-size: 1.6rem; color: {c_ratio}; font-family: 'IBM Plex Sans';">{s_ratio:.2f}</h2>
-                <p style="margin:0; font-size: 0.65rem; color: #6B7280;">Risk-Adjusted</p>
+            
+            <div class="metrics-row">
+                <div class="metric-segment" style="text-align: left; flex: 1.5;">
+                    <p style="margin:0; font-size: 0.7rem; color: #9CA3AF; text-transform: uppercase;">Sharpe Ratio</p>
+                    <h2 style="margin: 5px 0; font-size: 1.6rem; color: {c_ratio}; font-family: 'IBM Plex Sans';">{s_ratio:.2f}</h2>
+                    <p style="margin:0; font-size: 0.65rem; color: #6B7280;">{"⚠️ LOW SAMPLE" if metrics.get('Total Trades', 0) < 15 else "Risk-Adjusted"}</p>
+                </div>
+                <div class="metric-segment" style="flex: 1.5;">
+                    <p style="margin:0; font-size: 0.7rem; color: #9CA3AF; text-transform: uppercase;">{benchmark_name} Health</p>
+                    <h2 style="margin: 5px 0; font-size: 1.4rem; color: #FFFFFF; font-family: 'IBM Plex Sans'; font-weight: 600;">
+                        {df['Index_Return'].iloc[-1]*100:+.2f}%
+                    </h2>
+                    <p style="margin:0; font-size: 0.65rem; color: #6B7280;">Market Guardrail</p>
+                </div>
+                <div class="metric-segment" style="flex: 1.5; border-right: none; text-align: right;">
+                    <p style="margin:0; font-size: 0.7rem; color: #9CA3AF; text-transform: uppercase;">Market Regime</p>
+                    <h2 style="margin: 5px 0; font-size: 1.4rem; color: {reg_color}; font-family: 'IBM Plex Sans'; font-weight: 600;">{reg_name}</h2>
+                    <p style="margin:0; font-size: 0.65rem; color: #6B7280;">Factor Classification</p>
+                </div>
             </div>
         </div>
         """
@@ -650,12 +710,13 @@ if run_btn:
 
         with col_d:
             st.markdown("<h4 style='color: #E5E5E5;'>STRUCTURAL INTELLIGENCE</h4>", unsafe_allow_html=True)
-            report = generate_ai_commentary(ticker, signal_txt, conf, recent_sentiment, feat_imp, metrics, df)
+            report = generate_ai_commentary(ticker, signal_txt, conf, recent_sentiment, feat_imp, metrics, df, (reg_name, reg_color))
             
             volatility = df['Risk_Level'].iloc[-1] * 100
             
             st.markdown(f"""
             <div class="quant-card" style="font-size: 0.85rem; color: #D1D5DB; line-height: 1.6;">
+                <strong style="color: #EF4444;">[00] MARKET GUARDRAIL:</strong> {report['veto']}<br>
                 <strong style="color: #3B82F6;">[01] SYSTEMATIC VOLATILITY:</strong> {volatility:.2f}%<br>
                 <strong style="color: #3B82F6;">[02] STATISTICAL EDGE:</strong> {report['edge']}<br>
                 <strong style="color: #3B82F6;">[03] NLP DRIFT ANALYSIS:</strong> {report['catalyst']}<br>

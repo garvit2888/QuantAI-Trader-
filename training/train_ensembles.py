@@ -6,6 +6,8 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import accuracy_score, precision_score
 from sklearn.model_selection import TimeSeriesSplit
 from sklearn.calibration import CalibratedClassifierCV
+from sklearn.preprocessing import StandardScaler
+from sklearn.decomposition import PCA
 
 try:
     from xgboost import XGBClassifier
@@ -16,6 +18,7 @@ import sys
 import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from training.dataset_builder import prepare_dataset
+from engine.regime_detector import MarketRegimeDetector
 
 def train_and_validate(X, y, model, n_splits=5):
     """
@@ -93,44 +96,47 @@ def run_training_pipeline(ticker="RELIANCE.NS", lookback_years=None):
     X_train = train_df[features].ffill().fillna(0)
     y_train = train_df['Target_Class']
 
-    # --- 1. Correlation Filtering (Collinearity Pruning) ---
-    corr_matrix = X_train.corr().abs()
-    upper = corr_matrix.where(np.triu(np.ones(corr_matrix.shape), k=1).astype(bool))
-    to_drop = [column for column in upper.columns if any(upper[column] > 0.85)]
-    orthogonal_features = [f for f in features if f not in to_drop]
-    print(f"\n🧹 Collinearity Filter: Dropped {len(to_drop)} highly correlated/redundant features.")
-
-    # --- 2. Advanced Feature Selection (Top 12) ---
-    print("🌲 Running baseline Random Forest for elite feature extraction...")
-    selector_rf = RandomForestClassifier(n_estimators=100, max_depth=5, random_state=42)
-    # Check if we have two classes before fitting selector
-    if len(np.unique(y_train)) >= 2:
-        selector_rf.fit(X_train[orthogonal_features], y_train)
-        selector_importances = pd.Series(selector_rf.feature_importances_, index=orthogonal_features).sort_values(ascending=False)
-        top_n = min(12, len(orthogonal_features))
-        features = selector_importances.head(top_n).index.tolist()
-    else:
-        # Fallback if impossible to calculate importance
-        features = orthogonal_features[:12]
-        
-    print(f"🎯 Feature Pruning Complete. Selected the Top {len(features)} elite orthogonal predictors.")
+    # --- 1. Spectral Denoising (PCA Integration) ---
+    print(f"\n🧪 Applying Spectral Denoising (PCA) to {len(features)} features...")
     
-    # Strictly truncate the training pipeline mathematically
-    X_train = X_train[features]
+    # PCA requires scaled data
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(X_train)
+    
+    # We choose components that explain 95% of the variance to filter out noise tail
+    pca = PCA(n_components=0.95, random_state=42)
+    X_pca = pca.fit_transform(X_scaled)
+    
+    pca_feature_names = [f"PC_{i+1}" for i in range(X_pca.shape[1])]
+    X_train_final = pd.DataFrame(X_pca, columns=pca_feature_names, index=X_train.index)
+    
+    print(f"✅ PCA Denoising Complete: Condensed {len(features)} features into {X_pca.shape[1]} Principal Factors.")
+    print(f"📊 Explained Variance Ratio: {np.sum(pca.explained_variance_ratio_):.2%}")
     
     print("\n" + "="*50)
-    print(f"🚀 TRAINING CALIBRATED ENSEMBLE on {len(features)} Orthogonal Features")
+    print(f"🚀 TRAINING CALIBRATED ENSEMBLE with ElasticNet Regularization")
     print("="*50)
     
     # Wrap models in CalibratedClassifierCV (Platt Scaling)
+    # REGULARIZATION UPGRADES:
+    # 1. LogReg -> ElasticNet (L1 + L2)
+    # 2. XGBoost -> reg_alpha + reg_lambda
+    # 3. RF -> Reduced max_features for better pruning
     models = {
         "LogReg": CalibratedClassifierCV(
-            estimator=LogisticRegression(max_iter=1000, class_weight='balanced'), 
+            estimator=LogisticRegression(
+                penalty='elasticnet', 
+                solver='saga', 
+                l1_ratio=0.5, 
+                max_iter=2000, 
+                class_weight='balanced'
+            ), 
             method='sigmoid', cv=3
         ),
         "RandomForest": CalibratedClassifierCV(
             estimator=RandomForestClassifier(
                 n_estimators=200, max_depth=7, min_samples_leaf=5,
+                max_features='sqrt',
                 random_state=42, class_weight='balanced'
             ),
             method='sigmoid', cv=3
@@ -141,7 +147,9 @@ def run_training_pipeline(ticker="RELIANCE.NS", lookback_years=None):
          models["XGBoost"] = CalibratedClassifierCV(
              estimator=XGBClassifier(
                  n_estimators=100, max_depth=4, learning_rate=0.05, 
-                 subsample=0.8, colsample_bytree=0.8, random_state=42
+                 subsample=0.8, colsample_bytree=0.8, 
+                 reg_alpha=0.1, reg_lambda=1.0, # L1 and L2 Regularization
+                 random_state=42
              ),
              method='sigmoid', cv=3
          )
@@ -151,15 +159,15 @@ def run_training_pipeline(ticker="RELIANCE.NS", lookback_years=None):
     
     for name, model in models.items():
         print(f"\nTraining {name} with Calibration...")
-        trained, oos_pred = train_and_validate(X_train, y_train, model, n_splits=5)
+        trained, oos_pred = train_and_validate(X_train_final, y_train, model, n_splits=5)
         trained_models[name] = trained
         oos_signals[name] = oos_pred
         
     # Voter Logic using continuous probabilities
     all_oos = pd.DataFrame(oos_signals)
     avg_oos_prob = all_oos.mean(axis=1)
-    # Raising threshold to 0.55 to filter out random noise and weak predictions 
-    oos_signals["Ensemble"] = (avg_oos_prob >= 0.55).astype(int)
+    # Raising threshold to 0.59 to filter out random noise and weak predictions 
+    oos_signals["Ensemble"] = (avg_oos_prob >= 0.59).astype(int)
     
     # Feature Importance (Extract from uncalibrated base estimator of RF)
     best_model = trained_models["RandomForest"]
@@ -174,18 +182,32 @@ def run_training_pipeline(ticker="RELIANCE.NS", lookback_years=None):
         base_rf = best_model
         
     if hasattr(base_rf, 'feature_importances_'):
-        importances = base_rf.feature_importances_
-        feat_imp = pd.Series(importances, index=features).sort_values(ascending=False)
+        # 1. Get importance of Principal Components
+        pc_importances = base_rf.feature_importances_
+        
+        # 2. Map PC importance back to original features using PCA loadings
+        # PCA.components_ is (n_components, n_features)
+        # We take the absolute loadings to see which original features contribute most to important PCs
+        loadings = np.abs(pca.components_)
+        
+        # Weighted sum: multiply each PC's importance by its feature loadings
+        # Transpose loadings to get (n_features, n_components) then dot with pc_importances (n_components,)
+        feat_scores = np.dot(loadings.T, pc_importances)
+        
+        feat_imp = pd.Series(feat_scores, index=features).sort_values(ascending=False)
     else:
         feat_imp = pd.Series([1.0/len(features)]*len(features), index=features)
     
-    print("\n🌟 Top 10 Important Features:")
-    print(feat_imp.head(10))
+    # --- 4. Market Regime Intelligence ---
+    print("\n🔍 Identifying Structural Market Regimes...")
+    regime_detector = MarketRegimeDetector(n_regimes=4).fit(df)
+    current_regime, _ = regime_detector.predict(df)
+    print(f"📊 Current Sector Regime Detected: {current_regime}")
     
-    return trained_models, df, feat_imp, oos_signals
+    return trained_models, df, feat_imp, oos_signals, scaler, pca, features, regime_detector
 
 if __name__ == "__main__":
     res = run_training_pipeline("RELIANCE.NS")
     if res:
-        models, df, feat_imp, oos = res
+        models, df, feat_imp, oos, scaler, pca, trained_features, regime_detector = res
         print("✅ Pipeline test successful.")
